@@ -7,6 +7,6 @@ docker run --rm -it nxml
 
 
 ## Build
-´´´
+```
 docker build . -t nxml
-´´´
+```
