@@ -30,6 +30,6 @@ if __name__ == '__main__':
     if len(sys.argv)>2:
         infile = sys.argv[1]
         outfile = sys.argv[2]
-        create_embeddings(infile)
+        create_embeddings(infile, outfile)
     else:
         print("Usage: infile outfile")
