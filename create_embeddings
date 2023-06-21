@@ -2,3 +2,4 @@
 . setup_langchain
 echo "P1: $1"
 echo "P2: $2"
+python3 embeddings.py $1 $2
