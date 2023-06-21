@@ -1,3 +1,10 @@
-
+#!/bin/sh
+echo ""
+echo "NLP Setup"
+echo ""
+echo "$( dirname -- "${BASH_SOURCE[0]}" )"
+echo "Installing Python Packages:"
 
 pip install flask detoxify langdetect nltk
+
+echo "Done: NLP Setup"
