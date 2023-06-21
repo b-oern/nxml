@@ -24,3 +24,8 @@ def analyse_text(data, text_key = 'text'):
     data['words'] = word_tokenize(text, language=nltk_lang(data['lang']))
     return data
 
+
+
+if __name__ == '__main__':
+    from nwebclient import runner
+    runner.main(analyse_text)
