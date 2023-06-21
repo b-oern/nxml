@@ -1,0 +1,3 @@
+#!/bin/sh
+
+pip install langchain sentence_transformers
