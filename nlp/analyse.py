@@ -23,10 +23,10 @@ def nltk_lang(lang):
 def get_textblob(text, lang):
     if lang == 'de':
         from textblob_de import TextBlobDE 
-        blob = TextBlobDE("Das Auto ist sehr schön.")
+        blob = TextBlobDE(text)
     else:
         from textblob import TextBlob
-        blob = TextBlob("I have a lovely bunch of coconuts.")
+        blob = TextBlob(text)
     return blob
 
 def analyse_textblob(data, text_key = 'text'):
