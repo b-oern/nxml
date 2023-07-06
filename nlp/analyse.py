@@ -10,6 +10,21 @@ from langdetect import detect
 from nltk import word_tokenize
 
 
+from nwebclient import runner
+
+class FlairRunner(runner.BaseJobExecutor):
+    def __init__(self):
+        from flair.data import Sentence
+        from flair.models import SequenceTagge
+        self.tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
+    def tag_text(text):
+        sentence = Sentence(text)
+        return dict(self.tagger.predict(sentence))
+    def execute(self, data):
+        data['ner'] = self.tag_text(data['text'])
+        return data
+
+
 # https://realpython.com/natural-language-processing-spacy-python/
 # Named Entity Recognition
 # nlp = spacy.load("en_core_web_sm")
