@@ -25,6 +25,9 @@ class FlairRunner(runner.BaseJobExecutor):
         return data
 
 
+flair = FlairRunner()
+
+
 # https://realpython.com/natural-language-processing-spacy-python/
 # Named Entity Recognition
 # nlp = spacy.load("en_core_web_sm")
@@ -63,6 +66,7 @@ def analyse_text(data, text_key = 'text'):
     data['lang'] = detect(text)
     data['words'] = word_tokenize(text, language=nltk_lang(data['lang']))
     data = analyse_textblob(data)
+    data = flair(data)
     return data
 
 
