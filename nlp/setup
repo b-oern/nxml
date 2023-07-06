@@ -6,6 +6,7 @@ echo "$( dirname -- "${BASH_SOURCE[0]}" )"
 echo "Installing Python Packages:"
 
 pip install flask detoxify langdetect nltk textblob spacy
+pip install flair
 # python3 -m textblob.download_corpora
 
 echo "Done: NLP Setup"
