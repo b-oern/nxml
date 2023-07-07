@@ -29,9 +29,11 @@ class Nltk(runner.BaseJobExecutor):
         return 'english'
     def execute(self, data):
         from nltk import word_tokenize
+        from langdetect import detect
         if isinstance(data, str):
             data = {'text': data}
-        data['words'] = word_tokenize(data['text'], language=self.nltk_lang(data['lang']))
+        text = data['text']
+        data['words'] = word_tokenize(text, language=self.nltk_lang(detect(text)))
         return data
 
 class FlairRunner(runner.BaseJobExecutor):
