@@ -17,9 +17,19 @@ class FlairRunner(runner.BaseJobExecutor):
         from flair.data import Sentence
         from flair.models import SequenceTagge
         self.tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
-    def tag_text(text):
+    def tag_text(self, text):
         sentence = Sentence(text)
-        return dict(self.tagger.predict(sentence))
+        self.tagger.predict(sentence)
+        items = []
+        for entity in sentence.get_spans('ner'):
+            items.append(self.span_to_dict(entity))
+        return items
+    def span_to_dict(self, span):
+        # embedding
+        return { 'start_position': span.start_position, 
+                 'end_position': span.end_position,
+                 'text': span.text,
+                 'tag': str(span.tag)}
     def execute(self, data):
         data['ner'] = self.tag_text(data['text'])
         return data
