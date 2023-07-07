@@ -37,6 +37,7 @@ class Nltk(runner.BaseJobExecutor):
         data['words'] = word_tokenize(text, language=self.nltk_lang(data['lang']))
         return data
 
+
 class FlairRunner(runner.BaseJobExecutor):
     MODULES = ['flair']
     def __init__(self):
@@ -61,6 +62,7 @@ class FlairRunner(runner.BaseJobExecutor):
             data = {'text': data}
         data['ner'] = self.tag_text(data['text'])
         return data
+
 
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob']
