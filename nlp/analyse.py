@@ -66,7 +66,7 @@ class FlairRunner(runner.BaseJobExecutor):
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob', 'textblob_de']
     text_key = 'text'
-    def get_textblob(self, text, lang):
+    def get_textblob(self, text, lang='en'):
         if lang == 'de':
             from textblob_de import TextBlobDE 
             blob = TextBlobDE(text)
@@ -82,7 +82,7 @@ class TextBlobRunner(runner.BaseJobExecutor):
             'polarity': blob.sentiment.polarity,
             'subjectivity': blob.sentiment.subjectivity
         }
-        data['sentences'] = map(lambda x: str(x), blob.sentences)
+        data['sentences'] = list(map(lambda x: str(x), blob.sentences))
         return data
 
 # https://realpython.com/natural-language-processing-spacy-python/
