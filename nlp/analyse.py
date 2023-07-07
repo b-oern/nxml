@@ -79,8 +79,8 @@ class TextBlobRunner(runner.BaseJobExecutor):
         text = data[self.text_key]
         blob = self.get_textblob(text, data['lang'])
         data['sentimnet'] = {
-            'polarity': blob.sentimnet.polarity,
-            'subjectivity': blob.sentimnet.subjectivity
+            'polarity': blob.sentiment.polarity,
+            'subjectivity': blob.sentiment.subjectivity
         }
         data['sentences'] = map(lambda x: str(x), blob.sentences)
         return data
