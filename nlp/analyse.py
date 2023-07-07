@@ -13,6 +13,7 @@ from nltk import word_tokenize
 from nwebclient import runner
 
 class FlairRunner(runner.BaseJobExecutor):
+    MODULES = ['flair']
     def __init__(self):
         from flair.data import Sentence
         from flair.models import SequenceTagge
