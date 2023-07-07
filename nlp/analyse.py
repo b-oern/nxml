@@ -64,7 +64,7 @@ class FlairRunner(runner.BaseJobExecutor):
 
 
 class TextBlobRunner(runner.BaseJobExecutor):
-    MODULES = ['textblob']
+    MODULES = ['textblob', 'textblob_de']
     text_key = 'text'
     def get_textblob(self, text, lang):
         if lang == 'de':
