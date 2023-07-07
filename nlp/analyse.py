@@ -33,7 +33,8 @@ class Nltk(runner.BaseJobExecutor):
         if isinstance(data, str):
             data = {'text': data}
         text = data['text']
-        data['words'] = word_tokenize(text, language=self.nltk_lang(detect(text)))
+        data['lang'] = detect(text)
+        data['words'] = word_tokenize(text, language=self.nltk_lang(data['lang']))
         return data
 
 class FlairRunner(runner.BaseJobExecutor):
@@ -61,42 +62,34 @@ class FlairRunner(runner.BaseJobExecutor):
         data['ner'] = self.tag_text(data['text'])
         return data
 
-
-runner = runner.Pipeline(FlairRunner(), Nltk())
+class TextBlobRunner(runner.BaseJobExecutor):
+    MODULES = ['textblob']
+    text_key = 'text'
+    def get_textblob(text, lang):
+        if lang == 'de':
+            from textblob_de import TextBlobDE 
+            blob = TextBlobDE(text)
+        else:
+            from textblob import TextBlob
+            blob = TextBlob(text)
+        return blob
+    def execute(self, data):
+        # https://textblob.readthedocs.io/en/dev/api_reference.html#textblob.blob.BaseBlob
+        text = data[self.text_key]
+        blob = get_textblob(text, data['lang'])
+        data['sentimnet'] = {
+            'polarity': blob.sentimnet.polarity,
+            'subjectivity': blob.sentimnet.subjectivity
+        }
+        data['sentences'] = map(lambda x: str(x), blob.sentences)
+        return data
 
 # https://realpython.com/natural-language-processing-spacy-python/
 # Named Entity Recognition
 # nlp = spacy.load("en_core_web_sm")
 # https://spacy.io/models/de
 
-def get_textblob(text, lang):
-    if lang == 'de':
-        from textblob_de import TextBlobDE 
-        blob = TextBlobDE(text)
-    else:
-        from textblob import TextBlob
-        blob = TextBlob(text)
-    return blob
-
-def analyse_textblob(data, text_key = 'text'):
-    # https://textblob.readthedocs.io/en/dev/api_reference.html#textblob.blob.BaseBlob
-    text = data[text_key]
-    blob = get_textblob(text, data['lang'])
-    data['sentimnet'] = {
-        'polarity': blob.sentimnet.polarity,
-        'subjectivity': blob.sentimnet.subjectivity
-    }
-    data['sentences'] = map(lambda x: str(x), blob.sentences)
-    return data
-
-
-def analyse_text(data, text_key = 'text'):
-    text = data[text_key]
-    data['lang'] = detect(text)
-    data = analyse_textblob(data)
-    return data
-
-
 if __name__ == '__main__':
     from nwebclient import runner
-    runner.main(analyse_text)
+    pipeline = runner.Pipeline(FlairRunner(), Nltk(), TextBlobRunner())
+    runner.main(pipeline)
