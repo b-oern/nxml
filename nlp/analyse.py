@@ -90,7 +90,9 @@ class TextBlobRunner(runner.BaseJobExecutor):
 # nlp = spacy.load("en_core_web_sm")
 # https://spacy.io/models/de
 
+class NlpPipeline(runner.Pipeline):
+    def __init__(self):
+        super().__init__(FlairRunner(), Nltk(), TextBlobRunner(), Toxity())
+
 if __name__ == '__main__':
-    from nwebclient import runner
-    pipeline = runner.Pipeline(FlairRunner(), Nltk(), TextBlobRunner(), Toxity())
-    runner.main(pipeline)
+    runner.main(NlpPipeline())
