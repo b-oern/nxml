@@ -92,5 +92,5 @@ class TextBlobRunner(runner.BaseJobExecutor):
 
 if __name__ == '__main__':
     from nwebclient import runner
-    pipeline = runner.Pipeline(FlairRunner(), Nltk(), TextBlobRunner())
+    pipeline = runner.Pipeline(FlairRunner(), Nltk(), TextBlobRunner(), Toxity())
     runner.main(pipeline)
