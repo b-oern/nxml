@@ -1,5 +1,4 @@
 
-from langdetect import detect
 from nwebclient import runner
 
 class Toxity(runner.BaseJobExecutor):
@@ -67,7 +66,7 @@ class FlairRunner(runner.BaseJobExecutor):
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob']
     text_key = 'text'
-    def get_textblob(text, lang):
+    def get_textblob(self, text, lang):
         if lang == 'de':
             from textblob_de import TextBlobDE 
             blob = TextBlobDE(text)
@@ -78,7 +77,7 @@ class TextBlobRunner(runner.BaseJobExecutor):
     def execute(self, data):
         # https://textblob.readthedocs.io/en/dev/api_reference.html#textblob.blob.BaseBlob
         text = data[self.text_key]
-        blob = get_textblob(text, data['lang'])
+        blob = self.get_textblob(text, data['lang'])
         data['sentimnet'] = {
             'polarity': blob.sentimnet.polarity,
             'subjectivity': blob.sentimnet.subjectivity
