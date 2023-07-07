@@ -31,7 +31,7 @@ class Nltk(runner.BaseJobExecutor):
         from nltk import word_tokenize
         if isinstance(data, str):
             data = {'text': data}
-        data['words'] = word_tokenize(text, language=self.nltk_lang(data['lang']))
+        data['words'] = word_tokenize(data['text'], language=self.nltk_lang(data['lang']))
         return data
 
 class FlairRunner(runner.BaseJobExecutor):
