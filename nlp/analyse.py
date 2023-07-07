@@ -32,6 +32,8 @@ class FlairRunner(runner.BaseJobExecutor):
                  'text': span.text,
                  'tag': str(span.tag)}
     def execute(self, data):
+        if isinstance(data, str):
+            data = {'text': data}
         data['ner'] = self.tag_text(data['text'])
         return data
 
