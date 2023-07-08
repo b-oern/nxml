@@ -113,8 +113,8 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             text_inputs = self.tokenizer([data[self.text_key]], padding="max_length", return_tensors="pt").to(self.torch_device)
             text_features = self.model.get_text_features(**text_inputs)
             text_embeddings = torch.flatten(self.text_encoder(text_inputs.input_ids.to(self.torch_device))['last_hidden_state'],1,-1)
-            data['features'] = text_features
-            data['embeddings'] = text_embeddings
+            data['features'] = text_features.cpu().detach().numpy().astype(float)
+            data['embeddings'] = text_embeddings.cpu().detach().numpy().astype(float)
             data['success'] = True
         elif self.image_key in data:
             from PIL import Image
