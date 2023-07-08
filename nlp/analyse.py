@@ -138,6 +138,8 @@ class TextBlobRunner(runner.BaseJobExecutor):
             'polarity': blob.sentiment.polarity,
             'subjectivity': blob.sentiment.subjectivity
         }
+        data['sentimnet_polarity'] = blob.sentiment.polarity
+        data['sentimnet_subjectivity'] = blob.sentiment.subjectivity
         data['sentences'] = list(map(lambda x: str(x), blob.sentences))
         return data
 
