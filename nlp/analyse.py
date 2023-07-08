@@ -87,7 +87,7 @@ class BertEmbeddings():
             data['success'] = False
         return data
 
-class ClipEmbeddings():
+class ClipEmbeddings(runner.BaseJobExecutor):
     MODULES = ['transformers', 'pillow']
     model_id = 'openai/clip-vit-base-patch16'
     text_key = 'text'
