@@ -1,6 +1,7 @@
 
 from nwebclient import runner
 import base64
+import io
 
 class Toxity(runner.BaseJobExecutor):
     MODULES=['detoxify']
@@ -119,7 +120,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         elif self.image_key in data:
             from PIL import Image
             image_data = base64.b64decode(data[self.image_key])
-            img = Image.open(image_data)
+            img = Image.open(io.BytesIO(image_data))
             inputs = self.processor(images=img, return_tensors="pt", padding=True)
             features = self.model.get_image_features(**inputs)
             data['features'] = features.cpu().detach().numpy().astype(float).tolist()
