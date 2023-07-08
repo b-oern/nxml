@@ -108,7 +108,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         # https://huggingface.co/docs/transformers/model_doc/clip
         import torch
         if 'image_filename' in data:
-            data[image_key] = self.load_image(data['image_filename'])
+            data[self.image_key] = self.load_image(data['image_filename'])
         if self.text_key in data:
             text_inputs = self.tokenizer([data[self.text_key]], padding="max_length", return_tensors="pt").to(self.torch_device)
             text_features = self.model.get_text_features(**text_inputs)
