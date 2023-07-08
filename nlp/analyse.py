@@ -96,12 +96,12 @@ class ClipEmbeddings(runner.BaseJobExecutor):
     def __init__(self):
         import torch
         from torch.nn import CosineSimilarity
-        from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, CLIPProcessor
+        from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, AutoProcessor
         self.torch_device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = CLIPTokenizer.from_pretrained(self.model_id)
         self.text_encoder = CLIPTextModel.from_pretrained(self.model_id).to(self.torch_device)
         self.model = CLIPModel.from_pretrained(self.model_id).to(self.torch_device)
-        self.processor = CLIPProcessor.from_pretrained(self.model_id).to(self.torch_device)
+        self.processor = AutoProcessor.from_pretrained(self.model_id)
     def load_image(self, filename):
         with open(filename, "rb") as f:
             return base64.b64encode(f.read())
@@ -121,7 +121,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             from PIL import Image
             image_data = base64.b64decode(data[self.image_key])
             img = Image.open(io.BytesIO(image_data))
-            inputs = self.processor(images=img, return_tensors="pt", padding=True)
+            inputs = self.processor(images=img, return_tensors="pt")
             features = self.model.get_image_features(**inputs)
             data['features'] = features.cpu().detach().numpy().astype(float).tolist()
             data['success'] = True
