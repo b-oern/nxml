@@ -105,7 +105,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         self.processor = AutoProcessor.from_pretrained(self.model_id)
     def load_image(self, filename):
         with open(filename, "rb") as f:
-            return str(base64.b64encode(f.read()))
+            return base64.b64encode(f.read()).decode('ascii')
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
         import torch
