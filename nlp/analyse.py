@@ -1,5 +1,6 @@
 
 from nwebclient import runner
+import base64
 
 class Toxity(runner.BaseJobExecutor):
     MODULES=['detoxify']
@@ -64,6 +65,53 @@ class FlairRunner(runner.BaseJobExecutor):
         data['ner'] = self.tag_text(data['text'])
         return data
 
+
+class BertEmbeddings():
+    MODULES = ['transformers', 'langchain']
+    model = "all-MiniLM-L6-v2"
+    def __init__(self):
+        from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
+        self.embeddings = HuggingFaceEmbeddings(model_name=self.model)
+    def execute(self, data):
+        try:
+            embedding = self.embeddings.embed_documents([data['text']])
+            data['embedding'] = embedding[0]
+            job['embedding_model'] = self.model
+            result['jobs'].append(job)
+        except Exception as e:
+            print("Error: " + str(e))
+            data['success'] = False
+        return data
+
+class ClipEmbeddings():
+    MODULES = ['transformers', 'pillow']
+    model = 'openai/clip-vit-base-patch16'
+    text_key = 'text'
+    image_key = 'image'
+    def __init__(self):
+        import torch
+        from torch.nn import CosineSimilarity
+        from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, CLIPProcessor
+        self.torch_device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.tokenizer = CLIPTokenizer.from_pretrained(model_id)
+        self.text_encoder = CLIPTextModel.from_pretrained(model_id).to(torch_device)
+        self.model = CLIPModel.from_pretrained(model_id).to(torch_device)
+        self.processor = CLIPProcessor.from_pretrained(self.model)
+    def execute(self, data):
+        if self.text_key in data:
+            text_inputs = self.tokenizer([data[self.text_key]], padding="max_length", return_tensors="pt").to(torch_device)
+            text_features = self.model.get_text_features(**text_inputs)
+            text_embeddings = self.torch.flatten(self.text_encoder(text_inputs.input_ids.to(torch_device))['last_hidden_state'],1,-1)
+            data['features'] = text_features
+            data['embeddings'] = text_embeddings
+        elif self.image_key in data:
+            from PIL import Image
+            image_data = base64.b64decode(data[self.image_key])
+            img = Image.open(image_data)
+            inputs = self.processor(images=img, return_tensors="pt", padding=True)
+            features = self.model.get_image_features(**inputs)
+            data['features'] = features
+        return data
 
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob', 'textblob_de']
