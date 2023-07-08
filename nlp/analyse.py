@@ -106,12 +106,13 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             return base64.b64encode(f.read())
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
+        import torch
         if 'image_filename' in data:
             data[image_key] = self.load_image(data['image_filename'])
         if self.text_key in data:
             text_inputs = self.tokenizer([data[self.text_key]], padding="max_length", return_tensors="pt").to(self.torch_device)
             text_features = self.model.get_text_features(**text_inputs)
-            text_embeddings = self.torch.flatten(self.text_encoder(text_inputs.input_ids.to(self.torch_device))['last_hidden_state'],1,-1)
+            text_embeddings = torch.flatten(self.text_encoder(text_inputs.input_ids.to(self.torch_device))['last_hidden_state'],1,-1)
             data['features'] = text_features
             data['embeddings'] = text_embeddings
             data['success'] = True
