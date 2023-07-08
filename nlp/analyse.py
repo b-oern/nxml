@@ -101,6 +101,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         self.tokenizer = CLIPTokenizer.from_pretrained(self.model_id)
         self.text_encoder = CLIPTextModel.from_pretrained(self.model_id).to(self.torch_device)
         self.model = CLIPModel.from_pretrained(self.model_id).to(self.torch_device)
+        self.img_model = CLIPModel.from_pretrained(self.model_id)
         self.processor = AutoProcessor.from_pretrained(self.model_id)
     def load_image(self, filename):
         with open(filename, "rb") as f:
@@ -122,7 +123,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             image_data = base64.b64decode(data[self.image_key])
             img = Image.open(io.BytesIO(image_data))
             inputs = self.processor(images=img, return_tensors="pt")
-            features = self.model.get_image_features(**inputs)
+            features = self.img_model.get_image_features(**inputs)
             data['features'] = features.cpu().detach().numpy().astype(float).tolist()
             data['success'] = True
         return data
