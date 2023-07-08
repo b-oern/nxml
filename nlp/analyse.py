@@ -84,7 +84,7 @@ class BertEmbeddings():
         return data
 
 class ClipEmbeddings():
-    MODULES = ['transformers', 'pillow']
+    MODULES = ['transformers', 'sentence_transformers', 'pillow']
     model = 'openai/clip-vit-base-patch16'
     text_key = 'text'
     image_key = 'image'
