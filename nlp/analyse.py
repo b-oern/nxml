@@ -101,6 +101,7 @@ class ClipEmbeddings():
         with open(filename, "rb") as f:
             return base64.b64encode(f.read())
     def execute(self, data):
+        # https://huggingface.co/docs/transformers/model_doc/clip
         if 'image_filename' in data:
             data[image_key] = self.load_image(data['image_filename'])
         if self.text_key in data:
