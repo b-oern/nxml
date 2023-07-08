@@ -97,7 +97,12 @@ class ClipEmbeddings():
         self.text_encoder = CLIPTextModel.from_pretrained(model_id).to(torch_device)
         self.model = CLIPModel.from_pretrained(model_id).to(torch_device)
         self.processor = CLIPProcessor.from_pretrained(self.model)
+    def load_image(self, filename):
+        with open(filename, "rb") as f:
+            return base64.b64encode(f.read())
     def execute(self, data):
+        if 'image_filename' in data:
+            data[image_key] = self.load_image(data['image_filename'])
         if self.text_key in data:
             text_inputs = self.tokenizer([data[self.text_key]], padding="max_length", return_tensors="pt").to(torch_device)
             text_features = self.model.get_text_features(**text_inputs)
