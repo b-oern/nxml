@@ -70,7 +70,7 @@ class FlairRunner(runner.BaseJobExecutor):
 
 
 class BertEmbeddings():
-    MODULES = ['transformers', 'langchain']
+    MODULES = ['transformers', 'langchain', 'sentence_transformers']
     model = "all-MiniLM-L6-v2"
     def __init__(self):
         from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
@@ -87,7 +87,7 @@ class BertEmbeddings():
         return data
 
 class ClipEmbeddings():
-    MODULES = ['transformers', 'sentence_transformers', 'pillow']
+    MODULES = ['transformers', 'pillow']
     model = 'openai/clip-vit-base-patch16'
     text_key = 'text'
     image_key = 'image'
