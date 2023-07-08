@@ -14,6 +14,7 @@ class Toxity(runner.BaseJobExecutor):
         text = data[self.text_key]
         data['toxity'] = self.classifier_toxity.predict(text)
         #{'toxicity': 0.00019621708, 'severe_toxicity': 0.00019254998, 'obscene': 0.0012626372, 'identity_attack': 0.0003226225, 'insult': 0.0008828422, 'threat': 0.00013756882, 'sexual_explicit': 9.029167e-05}
+        data['success'] = True
         return data
     
 
@@ -37,6 +38,7 @@ class Nltk(runner.BaseJobExecutor):
         text = data['text']
         data['lang'] = detect(text)
         data['words'] = word_tokenize(text, language=self.nltk_lang(data['lang']))
+        data['success'] = True
         return data
 
 
@@ -63,6 +65,7 @@ class FlairRunner(runner.BaseJobExecutor):
         if isinstance(data, str):
             data = {'text': data}
         data['ner'] = self.tag_text(data['text'])
+        data['success'] = True
         return data
 
 
@@ -76,8 +79,8 @@ class BertEmbeddings():
         try:
             embedding = self.embeddings.embed_documents([data['text']])
             data['embedding'] = embedding[0]
-            job['embedding_model'] = self.model
-            result['jobs'].append(job)
+            data['embedding_model'] = self.model
+            data['success'] = True
         except Exception as e:
             print("Error: " + str(e))
             data['success'] = False
@@ -110,6 +113,7 @@ class ClipEmbeddings():
             text_embeddings = self.torch.flatten(self.text_encoder(text_inputs.input_ids.to(torch_device))['last_hidden_state'],1,-1)
             data['features'] = text_features
             data['embeddings'] = text_embeddings
+            data['success'] = True
         elif self.image_key in data:
             from PIL import Image
             image_data = base64.b64decode(data[self.image_key])
@@ -117,6 +121,7 @@ class ClipEmbeddings():
             inputs = self.processor(images=img, return_tensors="pt", padding=True)
             features = self.model.get_image_features(**inputs)
             data['features'] = features
+            data['success'] = True
         return data
 
 class TextBlobRunner(runner.BaseJobExecutor):
@@ -141,6 +146,7 @@ class TextBlobRunner(runner.BaseJobExecutor):
         data['sentimnet_polarity'] = blob.sentiment.polarity
         data['sentimnet_subjectivity'] = blob.sentiment.subjectivity
         data['sentences'] = list(map(lambda x: str(x), blob.sentences))
+        data['success'] = True
         return data
 
 # https://realpython.com/natural-language-processing-spacy-python/
