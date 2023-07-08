@@ -98,8 +98,8 @@ class ClipEmbeddings():
         from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, CLIPProcessor
         self.torch_device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = CLIPTokenizer.from_pretrained(self.model)
-        self.text_encoder = CLIPTextModel.from_pretrained(self.model).to(torch_device)
-        self.model = CLIPModel.from_pretrained(self.model).to(torch_device)
+        self.text_encoder = CLIPTextModel.from_pretrained(self.model).to(self.torch_device)
+        self.model = CLIPModel.from_pretrained(self.model).to(self.torch_device)
         self.processor = CLIPProcessor.from_pretrained(self.model)
     def load_image(self, filename):
         with open(filename, "rb") as f:
