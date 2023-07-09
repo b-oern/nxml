@@ -132,7 +132,10 @@ class NsfwDetector(ImageExecutor):
     def executeImage(self, image, data):
         from nsfw_detector import predict
         image_preds = predict.classify(self.model, self.image_filename())
-        data['nsfw_detector'] = image_preds
+        data['nsfw_detector'] = image_preds.values()[0]
+        data['neutral'] = image_preds.values()[0]['neutral']
+        data['porn'] = image_preds.values()[0]['porn']
+        data['sexy'] = image_preds.values()[0]['sexy']
         return data
     
 
