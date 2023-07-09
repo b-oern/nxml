@@ -120,7 +120,8 @@ class ImageExecutor(runner.BaseJobExecutor):
 
 class NsfwDetector(ImageExecutor):
     MODULES = ['nsfw-detector']
-    model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
+    #model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
+    model_url = 'https://s3.amazonaws.com/ir_public/nsfwjscdn/nsfw_mobilenet2.224x224.h5'
     model_filename = 'nsfw_detector.h5'
     def __init__(self):
         from nsfw_detector import predict
