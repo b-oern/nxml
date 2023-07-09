@@ -129,8 +129,8 @@ class NsfwDetector(ImageExecutor):
             util.download(self.model_url, self.model_filename)
         self.model = predict.load_model(self.model_filename)
     def executeImage(self, image, data):
-        from nsfw_detector import classify
-        image_preds = classify(self.model, self.image_filename())
+        from nsfw_detector import predict
+        image_preds = predict.classify(self.model, self.image_filename())
         data['nsfw_detector'] = image_preds
         return data
     
