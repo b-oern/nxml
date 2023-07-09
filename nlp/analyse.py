@@ -113,6 +113,8 @@ class ImageExecutor(runner.BaseJobExecutor):
             image_data = base64.b64decode(data[self.image_key])
             self.image = Image.open(io.BytesIO(image_data))
             data = self.executeImage(self.image, data)
+        if 'unset_image' in data and self.image_key in data:
+            dict.pop(self.image_key)
         return data
     def executeImage(self, image, data):
         return data
