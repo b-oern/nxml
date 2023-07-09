@@ -1,6 +1,7 @@
 
 from nwebclient import runner
 from nwebclient import util
+import os.path
 import base64
 import io
 import requests
@@ -92,6 +93,7 @@ class BertEmbeddings():
 
 class ImageExecutor(runner.BaseJobExecutor):
     image = None
+    image_key = 'image'
     def load_image(self, filename):
         with open(filename, "rb") as f:
             return base64.b64encode(f.read()).decode('ascii')
@@ -119,10 +121,13 @@ class ImageExecutor(runner.BaseJobExecutor):
 class NsfwDetector(ImageExecutor):
     MODULES = ['nsfw-detector']
     model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
+    model_filename = 'nsfw_detector.h5'
     def __init__(self):
         from nsfw_detector import predict
-        util.download(self.model_url, 'nsfw_detector.h5')
-        self.model = predict.load_model('./nsfw_detector.h5')
+        if not os.path.isfile(self.model_filename):
+            print("[NsfwDetector] Downloading model")
+            util.download(self.model_url, self.model_filename)
+        self.model = predict.load_model(self.model_filename)
     def executeImage(self, image, data):
         from nsfw_detector import classify
         image_preds = classify(self.model, self.image_filename())
