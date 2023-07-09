@@ -1,7 +1,9 @@
 
 from nwebclient import runner
+from nwebclient import util
 import base64
 import io
+import requests
 
 class Toxity(runner.BaseJobExecutor):
     MODULES=['detoxify']
@@ -87,6 +89,46 @@ class BertEmbeddings():
             print("Error: " + str(e))
             data['success'] = False
         return data
+
+class ImageExecutor(runner.BaseJobExecutor):
+    image = None
+    def load_image(self, filename):
+        with open(filename, "rb") as f:
+            return base64.b64encode(f.read()).decode('ascii')
+    def image_filename(self):
+        filename = 'image_executor.png'
+        self.image.save(filename)
+        return filename
+    def execute(self, data):
+        if 'image_filename' in data:
+            data[self.image_key] = self.load_image(data['image_filename'])
+        if 'image_url' in data:
+            response = requests.get(data['image_url'])
+            self.image = Image.open(BytesIO(response.content))
+            data = self.executeImage(self.image, data)
+        elif self.image_key in data:
+            from PIL import Image
+            image_data = base64.b64decode(data[self.image_key])
+            self.image = Image.open(io.BytesIO(image_data))
+            data = self.executeImage(self.image, data)
+        return data
+    def executeImage(self, image, data):
+        return data
+
+
+class NsfwDetector(ImageExecutor):
+    MODULES = ['nsfw-detector']
+    model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
+    def __init__(self):
+        from nsfw_detector import predict
+        util.download(self.model_url, 'nsfw_detector.h5')
+        self.model = predict.load_model('./nsfw_detector.h5')
+    def executeImage(self, image, data):
+        from nsfw_detector import classify
+        image_preds = classify(self.model, self.image_filename())
+        data['nsfw_detector'] = image_preds
+        return data
+    
 
 class ClipEmbeddings(runner.BaseJobExecutor):
     MODULES = ['transformers', 'pillow']
