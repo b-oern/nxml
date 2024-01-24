@@ -11,3 +11,5 @@ COPY embeddings.py .
 COPY nlp .
 
 RUN pwd
+
+CMD ["python", "-m", "nwebclient.runner", "--rest", "--executor"]
