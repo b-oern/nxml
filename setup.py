@@ -15,7 +15,7 @@ if __name__ == '__main__':
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
-        packages=setuptools.find_packages(),
+        packages=['nxml'],
         entry_points={
             'console_scripts': []
         },
