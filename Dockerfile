@@ -14,4 +14,4 @@ RUN pwd
 RUN ls
 RUN cd nxml && pip install .
 
-CMD ["python3", "-m", "nwebclient.runner", "--rest", "--executor", "nxml:NlpPipeline"]
+CMD ["python3", "-m", "nwebclient.runner", "--rest", "--executor", "nxml.analyse:NlpPipeline"]
