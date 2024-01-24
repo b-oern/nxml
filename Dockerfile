@@ -8,7 +8,7 @@ RUN chmod +x setup_langchain
 COPY create_embeddings .
 RUN chmod +x create_embeddings
 COPY embeddings.py .
-COPY nxml .
+ADD nxml .
 
 RUN pwd
 RUN ls
