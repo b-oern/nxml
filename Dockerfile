@@ -8,8 +8,10 @@ RUN chmod +x setup_langchain
 COPY create_embeddings .
 RUN chmod +x create_embeddings
 COPY embeddings.py .
-COPY nlp .
+COPY nxml .
 
 RUN pwd
+RUN ls
+RUN cd nxml && pip install .
 
 CMD ["python", "-m", "nwebclient.runner", "--rest", "--executor"]
