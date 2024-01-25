@@ -218,7 +218,7 @@ class NlpPipeline(runner.Pipeline):
 
 class AnalyseMain(runner.AutoDispatcher):
     def __init__(self):
-        super().__init__({
+        super().__init__('type', {
             'nlp': NlpPipeline(),
             'clip_embeddings': ClipEmbeddings(),
             'bert_embeddings':BertEmbeddings()            
