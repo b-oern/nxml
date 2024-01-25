@@ -216,5 +216,13 @@ class NlpPipeline(runner.Pipeline):
     def __init__(self):
         super().__init__(FlairRunner(), Nltk(), TextBlobRunner())
 
+class AnalyseMain(runner.AutoDispatcher):
+    def __init__(self):
+        super.__init__({
+            'nlp': NlpPipeline(),
+            'clip_embeddings': ClipEmbeddings(),
+            'bert_embeddings':BertEmbeddings()            
+        })
+
 if __name__ == '__main__':
     runner.main(NlpPipeline())
