@@ -214,7 +214,7 @@ class TextBlobRunner(runner.BaseJobExecutor):
 
 class NlpPipeline(runner.Pipeline):
     def __init__(self):
-        super().__init__(FlairRunner(), Nltk(), TextBlobRunner(), Toxity())
+        super().__init__(FlairRunner(), Nltk(), TextBlobRunner())
 
 if __name__ == '__main__':
     runner.main(NlpPipeline())
