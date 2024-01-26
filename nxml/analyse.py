@@ -74,7 +74,7 @@ class FlairRunner(runner.BaseJobExecutor):
         return data
 
 
-class BertEmbeddings():
+class BertEmbeddings(runner.BaseJobExecutor):
     MODULES = ['transformers', 'langchain', 'sentence_transformers']
     model = "all-MiniLM-L6-v2"
     def __init__(self):
