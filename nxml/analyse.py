@@ -91,36 +91,8 @@ class BertEmbeddings(runner.BaseJobExecutor):
             data['success'] = False
         return data
 
-class ImageExecutor(runner.BaseJobExecutor):
-    image = None
-    image_key = 'image'
-    def load_image(self, filename):
-        with open(filename, "rb") as f:
-            return base64.b64encode(f.read()).decode('ascii')
-    def image_filename(self):
-        filename = 'image_executor.png'
-        self.image.save(filename)
-        return filename
-    def execute(self, data):
-        if 'image_filename' in data:
-            data[self.image_key] = self.load_image(data['image_filename'])
-        if 'image_url' in data:
-            response = requests.get(data['image_url'])
-            self.image = Image.open(BytesIO(response.content))
-            data = self.executeImage(self.image, data)
-        elif self.image_key in data:
-            from PIL import Image
-            image_data = base64.b64decode(data[self.image_key])
-            self.image = Image.open(io.BytesIO(image_data))
-            data = self.executeImage(self.image, data)
-        if 'unset_image' in data and self.image_key in data:
-            dict.pop(self.image_key)
-        return data
-    def executeImage(self, image, data):
-        return data
 
-
-class NsfwDetector(ImageExecutor):
+class NsfwDetector(runner.ImageExecutor):
     MODULES = ['nsfw-detector']
     #model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
     model_url = 'https://s3.amazonaws.com/ir_public/nsfwjscdn/nsfw_mobilenet2.224x224.h5'
