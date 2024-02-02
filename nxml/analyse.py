@@ -1,6 +1,7 @@
 
 from nwebclient import runner
 from nwebclient import util
+import os
 import os.path
 import base64
 import io
@@ -112,6 +113,18 @@ class NsfwDetector(runner.ImageExecutor):
         data['porn'] = res['porn']
         data['sexy'] = res['sexy']
         return data
+
+class AgeAndGenderRunner(runner.ImageExecutor):
+    def __init__(self):
+        from age_and_gender import AgeAndGender
+        #os.system('git clone https://github.com/b-oern/age-and-gender.git')
+        self.data = AgeAndGender()
+        self.data.load_shape_predictor('./age-and-gender/example/models/shape_predictor_5_face_landmarks.dat')
+        self.data.load_dnn_gender_classifier('./age-and-gender/example/models/dnn_gender_classifier_v1.dat')
+        self.data.load_dnn_age_predictor('./age-and-gender/example/models/dnn_age_predictor_v1.dat')
+
+    def executeImage(self, image, data):
+        return self.data.predict(image)
     
 
 class ClipEmbeddings(runner.BaseJobExecutor):
