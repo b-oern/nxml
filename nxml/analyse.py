@@ -206,7 +206,8 @@ class AnalyseMain(runner.AutoDispatcher):
         super().__init__('type', **{
             'nlp': NlpPipeline(),
             'clip_embeddings': ClipEmbeddings(),
-            'bert_embeddings':BertEmbeddings()            
+            'bert_embeddings':BertEmbeddings(),
+            'age_and_gender': AgeAndGenderRunner()
         })
 
 if __name__ == '__main__':
