@@ -1,5 +1,5 @@
 #!/bin/sh
-pip install numpy nwebclient transformers requests nltk flair detoxify textblob textblob_de langchain sentence_transformers
+pip install numpy nwebclient transformers requests nltk flair detoxify textblob textblob_de langchain sentence_transformers pillow
 
 apt update
 apt install -y wget git curl libjpeg-dev libpng-dev python3-dev cmake gcc libx11-dev
