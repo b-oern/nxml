@@ -17,7 +17,10 @@ if __name__ == '__main__':
         url="https://bsnx.net/4.0/group/pynwebclient",
         packages=['nxml'],
         entry_points={
-            'console_scripts': []
+            'console_scripts': [],
+            'nweb_runner': [
+                'nlp = nxml.analyse:NlpPipeline'
+            ]
         },
         classifiers=[
             "Programming Language :: Python :: 3",
