@@ -8,7 +8,7 @@ docker run --rm -it -p 7070:7070 ghcr.io/b-oern/nxml:main
 
 Query Service with:
 ```
-curl 'http://127.0.0.1/?type=nlp&text=Good%20morning'
+curl 'http://127.0.0.1:7070/?type=nlp&text=Good%20morning'
 ```
 ```json
 {
