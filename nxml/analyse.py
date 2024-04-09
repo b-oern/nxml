@@ -55,7 +55,7 @@ class FlairRunner(runner.BaseJobExecutor):
             from flair.models import SequenceTagger
             self.tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
         except (ImportError, ModuleNotFoundError) as e:
-            print("Error: Init FlairRunner, " + e)
+            print("Error: Init FlairRunner, " + str(e))
     def tag_text(self, text):
         from flair.data import Sentence
         sentence = Sentence(text)
