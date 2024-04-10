@@ -134,6 +134,10 @@ class AgeAndGenderRunner(runner.ImageExecutor):
     
 
 class ClipEmbeddings(runner.BaseJobExecutor):
+    """
+      Erstellt Embeddings für Texte oder Bild
+
+    """
     MODULES = ['transformers', 'pillow']
     model_id = 'openai/clip-vit-base-patch16'
     text_key = 'text'

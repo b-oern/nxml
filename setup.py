@@ -11,7 +11,7 @@ if __name__ == '__main__':
         version=version,
         author="Bjoern Salgert",
         author_email="bjoern.salgert@hs-duesseldorf.de",
-        description="NWebClient via HTTP",
+        description="Executeable Machine Learning",
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
@@ -19,7 +19,14 @@ if __name__ == '__main__':
         entry_points={
             'console_scripts': [],
             'nweb_runner': [
-                'nlp = nxml.analyse:NlpPipeline'
+                'nlp = nxml.analyse:NlpPipeline',
+                'toxity = nxml.analyse:Toxity',
+                'flair = nxml.analyse:FlairRunner',
+                'bert = nxml.analyse:BertEmbeddings',
+                'nsfw = nxml.analyse:NsfwDetector',
+                'age = nxml.analyse:AgeAndGenderRunner',
+                'clip = nxml.analyse:ClipEmbeddings',
+                'textblob = nxml.analyse:TextBlobRunner'
             ]
         },
         classifiers=[
