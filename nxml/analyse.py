@@ -7,6 +7,21 @@ import base64
 import io
 import requests
 
+class Whisper(runner.BaseJobExecutor):
+    MODULES=['openai-whisper']
+    def __init__(self):
+	    # TODO search for ffmpeg in path
+        import whisper
+        self.model = whisper.load_model("base")
+    def execute(self, data):
+        if not 'audio' in data and 'file0' in data:
+            util.file_put_contents('audiofile.dat', base64.b64decode(data['file0']))  
+            data['audio'] = 'audiofile.dat'
+        result = self.model.transcribe(data['audio'])
+        #print(str(result))
+        data['text'] = ""+str(result['text'])
+        return data
+
 class Toxity(runner.BaseJobExecutor):
     MODULES=['detoxify']
     text_key = 'text'
