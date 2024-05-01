@@ -151,8 +151,8 @@ class AgeAndGenderRunner(runner.ImageExecutor):
 
     def executeImage(self, image, data):
         result = self.data.predict(image)
-	print(result)
-	return dict(result)
+        print(result)
+        return dict(result)
     
 
 class ClipEmbeddings(runner.BaseJobExecutor):
