@@ -150,7 +150,9 @@ class AgeAndGenderRunner(runner.ImageExecutor):
             self.data.load_dnn_age_predictor(dnn_file)
 
     def executeImage(self, image, data):
-        return self.data.predict(image)
+        result = self.data.predict(image)
+	print(result)
+	return dict(result)
     
 
 class ClipEmbeddings(runner.BaseJobExecutor):
