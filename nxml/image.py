@@ -88,9 +88,9 @@ class ImageSimilarity(r.ImageExecutor):
                     img_b = d.as_image()
                     d.similarity = self.compareImagesSSIM(image, img_b)
                     self.info("Similarity: "+str(d.similarity))
-                except Exception as e:
+                except:
                     d.similarity = 0
-                    self.error("Similarity Error on Image: "+str(d.id()) + " " + str(e))
+                    self.error("Similarity Error on Image: "+str(d.id()))
         docs.sort(key=lambda x: x.similarity, reverse=True)
         i = 1
         for d in docs:
@@ -140,7 +140,7 @@ class ImageSimilarity(r.ImageExecutor):
         elif 'index' in data:
             return self.index(data)
         elif 'index_async' in data:
-            Thread(target=self.index).start()
+            Thread(target=lambda: self.index({})).start()
             return {}
         else:
             return {}
