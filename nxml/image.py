@@ -9,6 +9,8 @@ from nwebclient import NWebClient
 class ImageSimilarity(r.ImageExecutor):
     """
       DocMap in nwebclient.nc
+
+      via https://medium.com/scrapehero/exploring-image-similarity-approaches-in-python-b8ca0a3ed5a3
     """
 
     MODULES = ['opencv-python', 'scikit-image']
@@ -24,7 +26,7 @@ class ImageSimilarity(r.ImageExecutor):
         image1 = cv2.cvtColor(numpy.array(image_a), cv2.COLOR_RGB2BGR)
         image2 = cv2.cvtColor(numpy.array(image_b), cv2.COLOR_RGB2BGR)
         image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]), interpolation=cv2.INTER_AREA)
-        print(image1.shape, image2.shape)
+        # print(image1.shape, image2.shape)
         # Convert images to grayscale
         image1_gray = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
         image2_gray = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
@@ -35,9 +37,13 @@ class ImageSimilarity(r.ImageExecutor):
 
     def searchSimilar(self, image, data):
         n = NWebClient(None)
-        q = 'kind=image&limit=50'
+        result = {'images': [], 'nweb': n.url()}
+        q = data['search']
+        if 'kind=image' not in q:
+            q += '&kind=image'
         docs = n.docs(q)
         self.info(f"Calculating Similarity with {len(docs)} Images")
+        result['image_count'] = len(docs)
         for d in docs:
             if d.is_image():
                 img_b = d.as_image()
@@ -46,10 +52,12 @@ class ImageSimilarity(r.ImageExecutor):
         docs.sort(key=lambda x: x.similarity, reverse=True)
         i = 1
         for d in docs:
-            self.info(f"{i}: {d.name()} {d.id()}")
+            self.info(f"{i}: {d.name()} id={d.id()} (Similarity: {d.similarity})")
+            result['images'].append({'id': d.id(), 'score': d.similarity})
             i += 1
             if i > 5:
                 break
+        return result
 
     def executeImage(self, image, data):
         b = self.get_image('b', data)
