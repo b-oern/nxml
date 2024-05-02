@@ -5,7 +5,7 @@ from nwebclient import runner as r
 
 class LibRosa(r.BaseJobExecutor):
     MODULES = ['librosa']
-    type='librosa'
+    type = 'librosa'
 
     def execute_file(self, file):
         import librosa

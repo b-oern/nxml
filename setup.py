@@ -26,7 +26,9 @@ if __name__ == '__main__':
                 'nsfw = nxml.analyse:NsfwDetector',
                 'age = nxml.analyse:AgeAndGenderRunner',
                 'clip = nxml.analyse:ClipEmbeddings',
-                'textblob = nxml.analyse:TextBlobRunner'
+                'textblob = nxml.analyse:TextBlobRunner',
+                'librosa = nxml.audio:LibRosa',
+                'image_similarity = nxml.image:ImageSimilarity'
             ]
         },
         classifiers=[
