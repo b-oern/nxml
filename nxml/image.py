@@ -89,6 +89,7 @@ class ImageSimilarity(r.ImageExecutor):
             i += 1
             if i > 5:
                 break
+        self.info(str(result))
         return result
 
     def index(self, data):
