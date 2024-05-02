@@ -118,6 +118,7 @@ class ImageSimilarity(r.ImageExecutor):
         img_a = doc.as_image()
         max_id = 0
         i = 0
+        score = 0
         for b in self.get_docs():
             i += 1
             if b.id() != doc.id():
@@ -129,9 +130,9 @@ class ImageSimilarity(r.ImageExecutor):
                 except:
                     self.error("Similarity Error on Image: " + str(b.id()))
             if i % 100 == 0:
-                self.info(f"At {i}")
+                self.info(f"At {i} Current Score: {score}")
         doc.setMetaValue(self.NS+'_cfg', 'max_id', max_id)
-        self.info("Done Doc.")
+        self.info(f"Done Doc ({doc.id()}).")
 
     def execute(self, data):
         if 'index' in data:
