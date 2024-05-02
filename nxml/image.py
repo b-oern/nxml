@@ -88,7 +88,7 @@ class ImageSimilarity(r.ImageExecutor):
                     self.info("Similarity: "+str(d.similarity))
                 except:
                     d.similarity = 0
-                    self.error("Similarity Error")
+                    self.error("Similarity Error on Image: "+str(d.id()))
         docs.sort(key=lambda x: x.similarity, reverse=True)
         i = 1
         for d in docs:
@@ -115,11 +115,16 @@ class ImageSimilarity(r.ImageExecutor):
         # Ein Bild mit allen anderen vergleichen
         img_a = doc.as_image()
         max_id = 0
+        i = 0
         for b in self.get_docs():
-            max_id = max(max_id, b.id())
-            score = self.compareImagesSSIM(img_a, b.as_image())
-            if score > self.threshold:
-                doc.setMetaValue(self.NS, str(b.id()), score)
+            i += 1
+            if b.id() != doc.id():
+                max_id = max(max_id, b.id())
+                score = self.compareImagesSSIM(img_a, b.as_image())
+                if score > self.threshold:
+                    doc.setMetaValue(self.NS, str(b.id()), score)
+            if i % 100 == 0:
+                self.info(f"At {i}")
         doc.setMetaValue(self.NS+'_cfg', 'max_id', max_id)
         self.info("Done Doc.")
 
