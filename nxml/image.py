@@ -121,10 +121,13 @@ class ImageSimilarity(r.ImageExecutor):
         for b in self.get_docs():
             i += 1
             if b.id() != doc.id():
-                max_id = max(max_id, b.id())
-                score = self.compareImagesSSIM(img_a, b.as_image())
-                if score > self.threshold:
-                    doc.setMetaValue(self.NS, str(b.id()), score)
+                try:
+                    max_id = max(max_id, b.id())
+                    score = self.compareImagesSSIM(img_a, b.as_image())
+                    if score > self.threshold:
+                        doc.setMetaValue(self.NS, str(b.id()), score)
+                except:
+                    self.error("Similarity Error on Image: " + str(b.id()))
             if i % 100 == 0:
                 self.info(f"At {i}")
         doc.setMetaValue(self.NS+'_cfg', 'max_id', max_id)
@@ -140,7 +143,8 @@ class ImageSimilarity(r.ImageExecutor):
         elif 'index' in data:
             return self.index(data)
         elif 'index_async' in data:
-            Thread(target=lambda: self.index({})).start()
+            self.thread = Thread(target=lambda: self.index({}))
+            self.thread.start()
             return {}
         else:
             return {}
