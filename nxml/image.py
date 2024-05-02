@@ -117,7 +117,7 @@ class ImageSimilarity(r.ImageExecutor):
     def executeImage(self, image, data):
         b = self.get_image('b', data)
         if b is not None:
-            score = self.compareImageSSIM(image, b)
+            score = self.compareImagesSSIM(image, b)
             return {'success': True, 'score': score}
         if 'search' in data:
             return self.searchSimilar(image, data)
