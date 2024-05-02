@@ -2,6 +2,8 @@
 # Project: nxml
 #
 
+from threading import Thread
+
 from nwebclient import runner as r
 from nwebclient import NWebClient
 
@@ -100,7 +102,7 @@ class ImageSimilarity(r.ImageExecutor):
         self.info(str(result))
         return result
 
-    def index(self, data):
+    def index(self, data=dict()):
         self.n = NWebClient(None)
         docs = self.n.docs('kind=image&no_meta='+self.NS+'_cfg'+'.max_id&limit=10')
         for d in docs:
@@ -135,8 +137,11 @@ class ImageSimilarity(r.ImageExecutor):
             return {'success': True, 'score': score}
         if 'search' in data:
             return self.searchSimilar(image, data)
-        if 'index' in data:
+        elif 'index' in data:
             return self.index(data)
+        elif 'index_async' in data:
+            Thread(target=self.index).start()
+            return {}
         else:
             return {}
 
