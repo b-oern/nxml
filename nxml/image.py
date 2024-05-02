@@ -86,9 +86,9 @@ class ImageSimilarity(r.ImageExecutor):
                     img_b = d.as_image()
                     d.similarity = self.compareImagesSSIM(image, img_b)
                     self.info("Similarity: "+str(d.similarity))
-                except:
+                except Exception as e:
                     d.similarity = 0
-                    self.error("Similarity Error on Image: "+str(d.id()))
+                    self.error("Similarity Error on Image: "+str(d.id()) + " " + str(e))
         docs.sort(key=lambda x: x.similarity, reverse=True)
         i = 1
         for d in docs:
