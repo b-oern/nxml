@@ -82,9 +82,13 @@ class ImageSimilarity(r.ImageExecutor):
         result['image_count'] = len(docs)
         for d in docs:
             if d.is_image():
-                img_b = d.as_image()
-                d.similarity = self.compareImagesSSIM(image, img_b)
-                self.info("Similarity: "+str(d.similarity))
+                try:
+                    img_b = d.as_image()
+                    d.similarity = self.compareImagesSSIM(image, img_b)
+                    self.info("Similarity: "+str(d.similarity))
+                except:
+                    d.similarity = 0
+                    self.error("Similarity Error")
         docs.sort(key=lambda x: x.similarity, reverse=True)
         i = 1
         for d in docs:
