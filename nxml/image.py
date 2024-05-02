@@ -104,7 +104,7 @@ class ImageSimilarity(r.ImageExecutor):
 
     def index(self, data=dict()):
         self.n = NWebClient(None)
-        docs = self.n.docs('kind=image&no_meta='+self.NS+'_cfg'+'.max_id&limit=10')
+        docs = self.n.docs('kind=image&no_meta='+self.NS+'_cfg'+'.max_id&limit='+str(data.get('limit', 10)))
         for d in docs:
             self.do_doc(d)
         return {'from': 'index()'}
@@ -133,6 +133,17 @@ class ImageSimilarity(r.ImageExecutor):
         doc.setMetaValue(self.NS+'_cfg', 'max_id', max_id)
         self.info("Done Doc.")
 
+    def execute(self, data):
+        if 'index' in data:
+            return self.index(data)
+        elif 'index_async' in data:
+            self.thread = Thread(target=lambda: self.index({}))
+            self.thread.start()
+            return {}
+        else:
+            return super().execute(data)
+
+
     def executeImage(self, image, data):
         b = self.get_image('b', data)
         if b is not None:
@@ -140,12 +151,6 @@ class ImageSimilarity(r.ImageExecutor):
             return {'success': True, 'score': score}
         if 'search' in data:
             return self.searchSimilar(image, data)
-        elif 'index' in data:
-            return self.index(data)
-        elif 'index_async' in data:
-            self.thread = Thread(target=lambda: self.index({}))
-            self.thread.start()
-            return {}
         else:
             return {}
 
