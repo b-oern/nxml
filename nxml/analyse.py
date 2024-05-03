@@ -212,7 +212,7 @@ class TextBlobRunner(runner.BaseJobExecutor):
     def execute(self, data):
         # https://textblob.readthedocs.io/en/dev/api_reference.html#textblob.blob.BaseBlob
         text = data[self.text_key]
-        blob = self.get_textblob(text, data['lang'])
+        blob = self.get_textblob(text, data.get('lang', 'en'))
         data['sentimnet'] = {
             'polarity': blob.sentiment.polarity,
             'subjectivity': blob.sentiment.subjectivity

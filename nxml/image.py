@@ -104,7 +104,10 @@ class ImageSimilarity(r.ImageExecutor):
 
     def index(self, data=dict()):
         self.n = NWebClient(None)
-        docs = self.n.docs('kind=image&no_meta='+self.NS+'_cfg'+'.max_id&limit='+str(data.get('limit', 10)))
+        q = 'kind=image&no_meta='+self.NS+'_cfg'+'.max_id&limit='+str(data.get('limit', 10))
+        if 'q' in data:
+            q += '&' + data['q']
+        docs = self.n.docs(q)
         for d in docs:
             self.do_doc(d)
         return {'from': 'index()'}
@@ -118,6 +121,7 @@ class ImageSimilarity(r.ImageExecutor):
         img_a = doc.as_image()
         max_id = 0
         i = 0
+        hits = 0
         score = 0
         for b in self.get_docs():
             i += 1
@@ -126,13 +130,15 @@ class ImageSimilarity(r.ImageExecutor):
                     max_id = max(max_id, b.id())
                     score = self.compareImagesSSIM(img_a, b.as_image())
                     if score > self.threshold:
+                        hits += 1
                         doc.setMetaValue(self.NS, str(b.id()), score)
                 except:
                     self.error("Similarity Error on Image: " + str(b.id()))
             if i % 100 == 0:
-                self.info(f"At {i} Current Score: {score}")
+                self.info(f"At {i} Current Score: {score}  Doc: {b.id()}")
         doc.setMetaValue(self.NS+'_cfg', 'max_id', max_id)
-        self.info(f"Done Doc ({doc.id()}).")
+        self.info(f"Done Doc ({doc.id()}) Hits: {hits}")
+        return hits
 
     def execute(self, data):
         if 'index' in data:
