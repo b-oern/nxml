@@ -19,6 +19,11 @@ class ImageSimilarity(r.ImageExecutor):
     NS = 'image_similarity'
     type = 'image_similarity'
 
+    comparators = {
+        'clip': 'compareImagesCLIP',
+        'ssim': 'compareImagesSSIM'
+    }
+
     threshold = 0.5
 
     def compareImagesSSIM(self, image_a, image_b):
@@ -72,6 +77,10 @@ class ImageSimilarity(r.ImageExecutor):
 
         #print(f"similarity Score: ", round(generateScore(image_a, image_b), 2))
         return round(generateScore(image_a, image_b), 2)/100
+
+    def compareImages(self, image_a, image_b, algo='clip'):
+        method = getattr(self, self.comparators[algo])
+        return method(image_a, image_b)
 
     def searchSimilar(self, image, data):
         n = NWebClient(None)
@@ -128,7 +137,7 @@ class ImageSimilarity(r.ImageExecutor):
             if b.id() != doc.id():
                 try:
                     max_id = max(max_id, b.id())
-                    score = self.compareImagesSSIM(img_a, b.as_image())
+                    score = self.compareImages(img_a, b.as_image())
                     if score > self.threshold:
                         hits += 1
                         doc.setMetaValue(self.NS, str(b.id()), score)
