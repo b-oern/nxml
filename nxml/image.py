@@ -3,10 +3,63 @@
 #
 
 from threading import Thread
+import json
 
 from nwebclient import runner as r
 from nwebclient import NWebClient
+from nwebclient import NWebDoc
 
+
+class DatasetWriter:
+    """
+     für clip retrival
+     Erstellt dataset nach https://github.com/rom1504/img2dataset
+    """
+    index = 0
+    output_folder = './'
+
+    def __init__(self, output_folder = './'):
+        self.output_folder = output_folder
+
+    def create_metadata(self, img:NWebDoc, fname:str):
+        width, height = img.as_image().size
+        return {
+            'url': img.url(),
+            'caption': img.title(),
+            'key': fname, # key of the form 000010005 : the first 5 digits are the shard id, the last 4 are the index in the shard
+            'status': 'success',
+            'error_message': '',
+            'width': width,
+            'height': height,
+            'original_width': width,
+            'original_height': height,
+            'exif': {}
+            #"sha256"
+        }
+
+    def write_image(self, img:NWebDoc):
+        fname = "{:9d}".format(self.index)
+        img.save(self.output_folder + fname+'.jpg')
+        with open(self.output_folder + fname+'.json', "w") as f:
+            json.dump(self.create_metadata(img, fname), f)
+        with open(self.output_folder + fname + '.txt', "w") as f:
+            f.write(img.title())
+        self.index += 1
+
+class ImageEmbeddingCreator(r.BaseJobExecutor):
+    """ Erstellt Embeddings """
+
+    embedding_folder = '.'
+
+    def __init__(self, embedding_folder='.'):
+        self.embedding_folder = embedding_folder
+
+    def create_embedding(self, img: NWebDoc):
+        guid = img.guid()
+    def execute(self, data):
+        #nc = NWebClient(None)
+        #nc.images()
+        return super().execute(data)
 
 class ImageSimilarity(r.ImageExecutor):
     """
