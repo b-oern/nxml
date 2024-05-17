@@ -4,10 +4,13 @@
 
 from threading import Thread
 import json
+import os.path
 
 from nwebclient import runner as r
 from nwebclient import NWebClient
 from nwebclient import NWebDoc
+
+from nxml import analyse
 
 
 class DatasetWriter:
@@ -48,17 +51,37 @@ class DatasetWriter:
 
 class ImageEmbeddingCreator(r.BaseJobExecutor):
     """ Erstellt Embeddings """
+    MODULES = ['numpy']
 
-    embedding_folder = '.'
+    embedding_folder = './'
+    embedder = None
 
-    def __init__(self, embedding_folder='.'):
+    embeddings = {}
+
+    def __init__(self, embedding_folder='./'):
         self.embedding_folder = embedding_folder
+        self.embedder = analyse.ClipEmbeddings()
+        self.embeddings = {}
 
     def create_embedding(self, img: NWebDoc):
+        import numpy as np
         guid = img.guid()
+        self.info("Create Embedding: " + guid)
+        numpy_array = self.embedder.calculate_image_embedding(img.as_image())
+        np.save(self.embedding_folder + guid + '.npy', numpy_array)
+        self.embeddings[guid] = numpy_array.tolist()
+
+    def inference(self):
+        i = 0
+        nc = NWebClient(None)
+        for img in nc.images():
+            if not os.path.isfile(self.embedding_folder + img.guid() + '.npy'):
+                self.create_embedding(img)
+        return {'inference': 'done', 'success': True}
+
     def execute(self, data):
-        #nc = NWebClient(None)
-        #nc.images()
+        if 'inference' in data:
+            return self.inference()
         return super().execute(data)
 
 class ImageSimilarity(r.ImageExecutor):

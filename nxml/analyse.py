@@ -176,6 +176,12 @@ class ClipEmbeddings(runner.BaseJobExecutor):
     def load_image(self, filename):
         with open(filename, "rb") as f:
             return base64.b64encode(f.read()).decode('ascii')
+
+    def calculate_image_embedding(self, img):
+        inputs = self.processor(images=img, return_tensors="pt")
+        features = self.img_model.get_image_features(**inputs)
+        return features.cpu().detach().numpy().astype(float)
+
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
         import torch
@@ -192,9 +198,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             from PIL import Image
             image_data = base64.b64decode(data[self.image_key])
             img = Image.open(io.BytesIO(image_data))
-            inputs = self.processor(images=img, return_tensors="pt")
-            features = self.img_model.get_image_features(**inputs)
-            data['features'] = features.cpu().detach().numpy().astype(float).tolist()
+            data['features'] = self.calculate_image_embedding(img).tolist()
             data['success'] = True
         return data
 
