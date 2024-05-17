@@ -93,17 +93,21 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
                     if self.threshold < score:
                         self.pairs.append({'a': a, 'b': b, 'score': score})
             i += 1
-            if i%10==0:
+            if i % 20 == 0:
                 self.info(f"{i}/{count} processed. Found: {len(self.pairs)}")
+                time.sleep(0.1)
 
 
     def create_embedding(self, img: NWebDoc):
         import numpy as np
-        guid = img.guid()
-        self.info("Create Embedding: " + guid)
-        numpy_array = self.embedder.calculate_image_embedding(img.as_image())
-        np.save(self.embedding_folder + guid + '.npy', numpy_array)
-        self.embeddings[guid] = numpy_array.tolist()
+        try:
+            guid = img.guid()
+            self.info("Create Embedding: " + guid)
+            numpy_array = self.embedder.calculate_image_embedding(img.as_image())
+            np.save(self.embedding_folder + guid + '.npy', numpy_array)
+            self.embeddings[guid] = numpy_array.tolist()
+        except Exception as e:
+            self.error("Failed to create embedding: " + str(e))
 
     def inference(self, q=''):
         i = 0
@@ -111,7 +115,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         for img in nc.images(q):
             if not os.path.isfile(self.embedding_folder + img.guid() + '.npy'):
                 self.create_embedding(img)
-                time.sleep(0.1)
+                time.sleep(0.2)
         return {'inference': 'done', 'success': True}
 
     def execute(self, data):
