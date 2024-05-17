@@ -63,6 +63,8 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     pairs = []
 
+    threshold = 0.9
+
     def __init__(self, embedding_folder='./'):
         self.embedding_folder = embedding_folder
         self.embedder = analyse.ClipEmbeddings()
@@ -82,12 +84,17 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         return 1 - cosine(embedding_a, embedding_b)
 
     def similarity_matrix(self):
+        i = 0
+        count = self.embeddings.keys()
         for a in self.embeddings.keys():
             for b in self.embeddings.keys():
                 if a != b:
                     score = self.similarity(self.embeddings[a][0], self.embeddings[b][0])
                     if 0.8 < score:
                         self.pairs.append({'a': a, 'b': b, 'score': score})
+            i += 1
+            if i%10==0:
+                self.info(f"{i}/{count} processed. Found: {len(self.pairs)}")
 
 
     def create_embedding(self, img: NWebDoc):
@@ -128,7 +135,7 @@ class ImageSimilarity(r.ImageExecutor):
         'ssim': 'compareImagesSSIM'
     }
 
-    threshold = 0.5
+    threshold = 0.9
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
