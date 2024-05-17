@@ -85,7 +85,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         for a in self.embeddings.keys():
             for b in self.embeddings.keys():
                 if a != b:
-                    score = self.similarity(self.embeddings[a], self.embeddings[b])
+                    score = self.similarity(self.embeddings[a][0], self.embeddings[b][0])
                     if 0.8 < score:
                         self.pairs.append({'a': a, 'b': b, 'score': score})
 
