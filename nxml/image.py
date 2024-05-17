@@ -5,6 +5,9 @@
 from threading import Thread
 import json
 import os.path
+import time
+import glob
+from scipy.spatial.distance import cosine
 
 from nwebclient import runner as r
 from nwebclient import NWebClient
@@ -58,10 +61,34 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     embeddings = {}
 
+    pairs = []
+
     def __init__(self, embedding_folder='./'):
         self.embedding_folder = embedding_folder
         self.embedder = analyse.ClipEmbeddings()
         self.embeddings = {}
+
+    def extract_guid(self, file):
+        a = file.split('/')
+        return a[-1].replace('.npy', '')
+
+    def load_embeddings(self):
+        import numpy as np
+        for file in glob.glob(self.embedding_folder+"*.npy"):
+            g = self.extract_guid(file)
+            self.embeddings[g] = np.load(file)
+
+    def similarity(self, embedding_a, embedding_b):
+        return 1 - cosine(embedding_a, embedding_b)
+
+    def similarity_matrix(self):
+        for a in self.embeddings.keys():
+            for b in self.embeddings.keys():
+                if a != b:
+                    score = self.similarity(self.embeddings[a], self.embeddings[b])
+                    if 0.8 < score:
+                        self.pairs.append({'a': a, 'b': b, 'score': score})
+
 
     def create_embedding(self, img: NWebDoc):
         import numpy as np
@@ -77,6 +104,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         for img in nc.images(q):
             if not os.path.isfile(self.embedding_folder + img.guid() + '.npy'):
                 self.create_embedding(img)
+                time.sleep(0.1)
         return {'inference': 'done', 'success': True}
 
     def execute(self, data):
