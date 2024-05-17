@@ -85,12 +85,12 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     def similarity_matrix(self):
         i = 0
-        count = self.embeddings.keys()
+        count = len(self.embeddings.keys())
         for a in self.embeddings.keys():
             for b in self.embeddings.keys():
                 if a != b:
                     score = self.similarity(self.embeddings[a][0], self.embeddings[b][0])
-                    if 0.8 < score:
+                    if self.threshold < score:
                         self.pairs.append({'a': a, 'b': b, 'score': score})
             i += 1
             if i%10==0:
