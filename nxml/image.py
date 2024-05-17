@@ -71,10 +71,10 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         np.save(self.embedding_folder + guid + '.npy', numpy_array)
         self.embeddings[guid] = numpy_array.tolist()
 
-    def inference(self):
+    def inference(self, q=''):
         i = 0
         nc = NWebClient(None)
-        for img in nc.images():
+        for img in nc.images(q):
             if not os.path.isfile(self.embedding_folder + img.guid() + '.npy'):
                 self.create_embedding(img)
         return {'inference': 'done', 'success': True}
