@@ -69,6 +69,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         self.embedding_folder = embedding_folder
         self.embedder = analyse.ClipEmbeddings()
         self.embeddings = {}
+        self.nc = NWebClient(None)
 
     def extract_guid(self, file):
         a = file.split('/')
@@ -122,19 +123,21 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         :return:
         """
         i = 0
-        nc = NWebClient(None)
-        for img in nc.images(q):
+        for img in self.nc.images(q):
             if not os.path.isfile(self.embedding_folder + img.guid() + '.npy'):
                 self.create_embedding(img)
                 time.sleep(0.2)
         return {'inference': 'done', 'success': True}
+
+    def load_pairs(self):
+        with open("pairs.json", 'r') as f:
+            self.pairs = json.load(f)
 
     def save_pairs(self):
         with open("pairs.json", 'w') as f:
             json.dump(self.pairs, f)
 
     def publish_pairs(self):
-        self.nc = NWebClient(None)
         i = 0
         for pair in self.pairs:
             self.publish_recomendations(pair['a'], pair['b'], pair['score'])
