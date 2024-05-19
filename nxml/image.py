@@ -63,7 +63,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     pairs = []
 
-    threshold = 0.9
+    threshold = 0.95
 
     def __init__(self, embedding_folder='./'):
         self.embedding_folder = embedding_folder
@@ -84,11 +84,17 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         return 1 - cosine(embedding_a, embedding_b)
 
     def similarity_matrix(self):
+        """
+           ~40/Minute
+        :return:
+        """
         i = 0
         count = len(self.embeddings.keys())
+        processed = [] # indexed list verwenden
         for a in self.embeddings.keys():
+            processed.append(a)
             for b in self.embeddings.keys():
-                if a != b:
+                if a != b and b not in processed:
                     score = self.similarity(self.embeddings[a][0], self.embeddings[b][0])
                     if self.threshold < score:
                         self.pairs.append({'a': a, 'b': b, 'score': score})
@@ -96,7 +102,6 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             if i % 20 == 0:
                 self.info(f"{i}/{count} processed. Found: {len(self.pairs)}")
                 time.sleep(0.1)
-
 
     def create_embedding(self, img: NWebDoc):
         import numpy as np
@@ -110,6 +115,12 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             self.error("Failed to create embedding: " + str(e))
 
     def inference(self, q=''):
+        """
+        Auf dem Rpi4 ~1500 Bilder/Stunde
+        Etwa 100MB pro 10.000 Embeddings
+        :param q:string e.g. 'limit=10000'
+        :return:
+        """
         i = 0
         nc = NWebClient(None)
         for img in nc.images(q):
@@ -118,10 +129,30 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
                 time.sleep(0.2)
         return {'inference': 'done', 'success': True}
 
+    def save_pairs(self):
+        with open("pairs.json", 'w') as f:
+            json.dump(self.pairs, f)
+
+    def publish_pairs(self):
+        self.nc = NWebClient(None)
+        i = 0
+        for pair in self.pairs:
+            self.publish_recomendations(pair['a'], pair['b'], pair['score'])
+            self.publish_recomendations(pair['b'], pair['a'], pair['score'])
+            i += 1
+            if i % 100 == 0:
+                self.info(f"{i}/{len(self.pairs)} processed.")
+
+    def publish_recomendations(self, guid_from, guid_to, score):
+        f = self.nc.doc(guid_from)
+        t = self.nc.doc(guid_to)
+        f.setMetaValue('image_similarity', str(t.id()), str(score))
+
     def execute(self, data):
         if 'inference' in data:
             return self.inference()
         return super().execute(data)
+
 
 class ImageSimilarity(r.ImageExecutor):
     """
