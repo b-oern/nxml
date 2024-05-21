@@ -53,7 +53,9 @@ class DatasetWriter:
         self.index += 1
 
 class ImageEmbeddingCreator(r.BaseJobExecutor):
-    """ Erstellt Embeddings """
+    """
+        Erstellt Embeddings
+    """
     MODULES = ['numpy']
 
     embedding_folder = './'
@@ -65,11 +67,16 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     threshold = 0.95
 
+    knn = None
+    knn_ids = {}
+
     def __init__(self, embedding_folder='./'):
         self.embedding_folder = embedding_folder
         self.embedder = analyse.ClipEmbeddings()
         self.embeddings = {}
         self.nc = NWebClient(None)
+        self.knn = None
+        self.knn_ids = None
 
     def extract_guid(self, file):
         a = file.split('/')
@@ -78,8 +85,9 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
     def load_embeddings(self):
         import numpy as np
         for file in glob.glob(self.embedding_folder+"*.npy"):
-            g = self.extract_guid(file)
-            self.embeddings[g] = np.load(file)
+            if 'embeddings' not in file:
+                g = self.extract_guid(file)
+                self.embeddings[g] = np.load(file)
 
     def numpy_all(self):
         import numpy as np
@@ -92,10 +100,30 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             index[i] = key
             i += 1
         a = np.array(array)
-        np.save(self.embedding_folder + 'embeddings.all_npy', a)
+        np.save(self.embedding_folder + 'embeddings', a)
         with open("index.json", 'w') as f:
             json.dump(index, f)
         return a
+
+    def build_knn_index(self):
+        from autofaiss import build_index
+        import numpy as np
+        embeddings = np.load(self.embedding_folder + 'embeddings.npy')
+        build_index(embeddings=embeddings, index_path="knn.index", index_infos_path="index_infos.json", max_index_memory_usage="4G", current_memory_available="4G")
+
+    def load_knn(self):
+        import faiss
+        self.knn = faiss.read_index("knn.index")
+        with open("index.json", "r") as f:
+            self.knn_ids = json.load(f)
+
+    def knn_q(self, embedding, k=5):
+        res = []
+        distances, indices = self.knn.search(embedding, k)
+        for i, (dist, indice) in enumerate(zip(distances[0], indices[0])):
+            print(f"{i + 1}: Vector number {indice:4} with distance {dist}")
+            res.append({'guid': self.knn_ids[str(indice)], 'distance': dist, 'i': i+1})
+        return res
 
 
 
