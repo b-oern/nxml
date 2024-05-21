@@ -74,6 +74,8 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
     knn_ids = {}
 
     def __init__(self, embedding_folder='./', args:u.Args={}):
+        self.var_names.append("embedding_folder")
+        self.var_names.append("threshold")
         if self.embedding_folder == embedding_folder and args.get('embedding_folder', None) is not None:
             self.embedding_folder = args.get('embedding_folder', None)
         else:
