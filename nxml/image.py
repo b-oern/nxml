@@ -12,6 +12,7 @@ from scipy.spatial.distance import cosine
 from nwebclient import runner as r
 from nwebclient import NWebClient
 from nwebclient import NWebDoc
+from nwebclient import util as u
 
 from nxml import analyse
 
@@ -56,7 +57,9 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
     """
         Erstellt Embeddings
     """
-    MODULES = ['numpy']
+    MODULES = ['numpy', 'autofaiss']
+
+    type = 'img_embedding'
 
     embedding_folder = './'
     embedder = None
@@ -70,8 +73,11 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
     knn = None
     knn_ids = {}
 
-    def __init__(self, embedding_folder='./'):
-        self.embedding_folder = embedding_folder
+    def __init__(self, embedding_folder='./', args:u.Args={}):
+        if self.embedding_folder == embedding_folder and args.get('embedding_folder', None) is not None:
+            self.embedding_folder = args.get('embedding_folder', None)
+        else:
+            self.embedding_folder = embedding_folder
         self.embedder = analyse.ClipEmbeddings()
         self.embeddings = {}
         self.nc = NWebClient(None)
@@ -106,6 +112,10 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         return a
 
     def build_knn_index(self):
+        """
+        https://github.com/criteo/autofaiss
+        :return:
+        """
         from autofaiss import build_index
         import numpy as np
         embeddings = np.load(self.embedding_folder + 'embeddings.npy')
@@ -121,13 +131,15 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         embedding = self.embedder.calculate_text_embedding(q)
         return self.knn_q(embedding, k)
 
-
     def knn_q(self, embedding, k=5):
+        if self.knn is None:
+            self.load_knn()
         res = []
         distances, indices = self.knn.search(embedding, k)
         for i, (dist, indice) in enumerate(zip(distances[0], indices[0])):
-            print(f"{i + 1}: Vector number {indice:4} with distance {dist}")
-            res.append({'guid': self.knn_ids[str(indice)], 'distance': dist, 'i': i+1})
+            self.info(f"{i + 1}: Vector number {indice:4} with distance {dist}")
+            guid = self.knn_ids[str(indice)]
+            res.append({'guid': guid, 'distance': dist, 'i': i+1,    'id': guid, 'score': dist})
         return res
 
     def similarity(self, embedding_a, embedding_b):
@@ -203,6 +215,9 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
     def execute(self, data):
         if 'inference' in data:
             return self.inference()
+        elif 'q' in data:
+            q = data['q'] if data['q'] != '' else data['text']
+            return self.knn_q_text(q, int(data.get('k', 5)))
         return super().execute(data)
 
 
