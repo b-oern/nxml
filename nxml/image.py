@@ -142,7 +142,7 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             self.info(f"{i + 1}: Vector number {indice:4} with distance {dist}")
             guid = self.knn_ids[str(indice)]
             res.append({'guid': guid, 'distance': float(dist), 'i': i+1,    'id': guid, 'score': float(dist)})
-        return {'items': res}
+        return {'images': res}
 
     def similarity(self, embedding_a, embedding_b):
         return 1 - cosine(embedding_a, embedding_b)
