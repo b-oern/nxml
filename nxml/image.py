@@ -117,6 +117,9 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         with open("index.json", "r") as f:
             self.knn_ids = json.load(f)
 
+    def knn_q_text(self, q, k=5):
+
+
     def knn_q(self, embedding, k=5):
         res = []
         distances, indices = self.knn.search(embedding, k)
@@ -124,8 +127,6 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             print(f"{i + 1}: Vector number {indice:4} with distance {dist}")
             res.append({'guid': self.knn_ids[str(indice)], 'distance': dist, 'i': i+1})
         return res
-
-
 
     def similarity(self, embedding_a, embedding_b):
         return 1 - cosine(embedding_a, embedding_b)

@@ -182,6 +182,12 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         features = self.img_model.get_image_features(**inputs)
         return features.cpu().detach().numpy().astype(float)
 
+    def calculate_text_embedding(self, text):
+        text_inputs = self.tokenizer([text], padding="max_length", return_tensors="pt").to(self.torch_device)
+        text_features = self.model.get_text_features(**text_inputs)
+        return text_features.cpu().detach().numpy()
+
+
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
         import torch
