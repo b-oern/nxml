@@ -173,6 +173,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         self.model = CLIPModel.from_pretrained(self.model_id).to(self.torch_device)
         self.img_model = CLIPModel.from_pretrained(self.model_id)
         self.processor = AutoProcessor.from_pretrained(self.model_id)
+
     def load_image(self, filename):
         with open(filename, "rb") as f:
             return base64.b64encode(f.read()).decode('ascii')

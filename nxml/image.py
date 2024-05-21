@@ -118,6 +118,8 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             self.knn_ids = json.load(f)
 
     def knn_q_text(self, q, k=5):
+        embedding = self.embedder.calculate_text_embedding(q)
+        return self.knn_q(embedding, k)
 
 
     def knn_q(self, embedding, k=5):
