@@ -81,6 +81,24 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
             g = self.extract_guid(file)
             self.embeddings[g] = np.load(file)
 
+    def numpy_all(self):
+        import numpy as np
+        array = []
+        index = {}
+        i = 0
+        for key in self.embeddings:
+            a = self.embeddings[key].tolist()[0]
+            array.append(a)
+            index[i] = key
+            i += 1
+        a = np.array(array)
+        np.save(self.embedding_folder + 'embeddings.all_npy', a)
+        with open("index.json", 'w') as f:
+            json.dump(index, f)
+        return a
+
+
+
     def similarity(self, embedding_a, embedding_b):
         return 1 - cosine(embedding_a, embedding_b)
 
