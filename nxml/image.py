@@ -125,8 +125,8 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
 
     def load_knn(self):
         import faiss
-        self.knn = faiss.read_index("knn.index")
-        with open("index.json", "r") as f:
+        self.knn = faiss.read_index(self.embedding_folder + "knn.index")
+        with open(self.embedding_folder + "index.json", "r") as f:
             self.knn_ids = json.load(f)
 
     def knn_q_text(self, q, k=5):
