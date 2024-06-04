@@ -39,7 +39,7 @@ class TextClassifier(r.BaseJobExecutor):
         self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
     def classify(self, text, classes):
-        self.classifier(text, classes, multi_label=True)
+        return self.classifier(text, classes, multi_label=True)
 
     def run_group(self, **data):
         nc = NWebClient(data.get('nweb', None))
