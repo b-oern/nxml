@@ -53,7 +53,7 @@ class DatasetWriter:
             f.write(img.title())
         self.index += 1
 
-class ImageEmbeddingCreator(r.BaseJobExecutor):
+class ImageEmbeddingCreator(r.ImageExecutor):
     """
         Erstellt Embeddings
     """
@@ -220,6 +220,10 @@ class ImageEmbeddingCreator(r.BaseJobExecutor):
         elif 'q' in data:
             q = data['q'] if data['q'] != '' else data['text']
             return self.knn_q_text(q, int(data.get('k', 5)))
+        elif 'image' in data:
+            img = self.get_image('image', data)
+            embedding = self.embedder.calculate_image_embedding(img)
+            return self.knn_q(embedding, int(data.get('k', 5)))
         return super().execute(data)
 
 

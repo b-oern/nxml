@@ -28,7 +28,9 @@ if __name__ == '__main__':
                 'clip = nxml.analyse:ClipEmbeddings',
                 'textblob = nxml.analyse:TextBlobRunner',
                 'librosa = nxml.audio:LibRosa',
-                'image_similarity = nxml.image:ImageSimilarity'
+                'image_similarity = nxml.image:ImageSimilarity',
+                'speech_reg = nxml.audio:CommandRecognition',
+                'qa = nxml.nlp:QuestionAnswering'
             ]
         },
         classifiers=[
