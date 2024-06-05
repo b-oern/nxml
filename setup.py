@@ -30,7 +30,10 @@ if __name__ == '__main__':
                 'librosa = nxml.audio:LibRosa',
                 'image_similarity = nxml.image:ImageSimilarity',
                 'speech_reg = nxml.audio:CommandRecognition',
-                'qa = nxml.nlp:QuestionAnswering'
+                'qa = nxml.nlp:QuestionAnswering',
+                'text_classifier = nxml.nlp:TextClassifier',
+                'ttt = nxml.nlp:TextToText',
+                'od = nxml.image:ObjectDetector'
             ]
         },
         classifiers=[

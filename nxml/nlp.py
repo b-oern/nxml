@@ -1,9 +1,72 @@
 
-
+import random
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
 from nwebclient import base as b
+
+
+class DynamicPrompt:
+    """
+    {{firstname()}}   {{oneof("sagt", "schreibt")}}
+    """
+    def __init__(self):
+        from nwebclient import llm
+        self.data = llm
+        from jinja2.nativetypes import NativeEnvironment
+        self.env = NativeEnvironment()
+        self.env.globals.update(firstname=self.firstname)
+        self.env.globals.update(oneof=self.oneof)
+        # fristname lastname city oneof
+
+    def firstname(self):
+        return random.choice([random.choice(self.data.de_firstname_male), random.choice(self.data.de_firstname_female)])
+
+    def oneof(self, *args):
+        return random.choice(args)
+
+    def __call__(self, prompt, *args, **kwargs):
+        t = self.env.from_string(prompt)
+        return t.render()
+
+
+class TextToText(r.BaseJobExecutor):
+    """
+    ramsrigouthamg/t5-large-paraphraser-diverse-high-quality
+    """
+
+    DE_GRAMMAR = "MRNH/mbart-german-grammar-corrector"
+    DE_PARAPHRASE = "Lelon/t5-german-paraphraser-large"
+
+    type = 'ttt'
+    model_name = ''
+    def __init__(self, model="Lelon/t5-german-paraphraser-large"):
+        from transformers import pipeline
+        self.model_name = model
+        self.pipe = pipeline("text2text-generation", model="Lelon/t5-german-paraphraser-large")
+
+    def generate(self, text):
+        # pipe liefert [{'generated_text': 'Ich kann heute nicht pünktlich sein.'}]
+        return self.pipe(text)[0]
+
+    def execute(self, data):
+        if 'text' in data:
+            return self.generate(data['text'])
+        return super().execute(data)
+
+    def page(self, params):
+        p = b.Page(owner=self)
+        p.h2("Text2Text")
+        p('<form>')
+        p('<input type="hidden" name="type" value="' + self.type + '" />')
+        p('<input type="text" name="prompt" value="" />')
+        p('<input type="submit" name="submit" value="Execute" />')
+        p('</form>')
+        if 'prompt' in params:
+            r = self.generate(params['prompt'])
+            p.div(r['generated_text'])
+        return p.nxui()
+
 
 
 class QuestionAnswering(r.BaseJobExecutor):
@@ -32,7 +95,9 @@ class QuestionAnswering(r.BaseJobExecutor):
 
 class TextClassifier(r.BaseJobExecutor):
     """
-    https://huggingface.co/facebook/bart-large-mnli
+    https://huggingface.co/facebook/bart-large-mnli - 1.7GB
+
+    t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
     def __init__(self):
         from transformers import pipeline
@@ -49,8 +114,11 @@ class TextClassifier(r.BaseJobExecutor):
         for doc in nc.group(data['group']):
             result = self.classify(doc.content(), classes)
             print(f"{doc.title()}: {result['labels'][0]} {result['scores'][0]}")
+        return {}
 
     def execute(self, data):
+        if 'classify' in data:
+            return self.classify(data['classify'], data.get('classes', []))
         if 'group' in data:
-            self.run_group(**data)
+            return self.run_group(**data)
         return super().execute(data)

@@ -1,6 +1,8 @@
+import json
 
 from nwebclient import runner
 from nwebclient import util
+from nwebclient import base as b
 import os
 import os.path
 import base64
@@ -8,7 +10,10 @@ import io
 import requests
 
 class Whisper(runner.BaseJobExecutor):
-    MODULES=['openai-whisper']
+
+    MODULES = ['openai-whisper']
+
+    type = 'whisper'
     def __init__(self):
 	    # TODO search for ffmpeg in path
         import whisper
@@ -211,6 +216,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
 
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob', 'textblob_de']
+    type = 'textblob'
     text_key = 'text'
     def get_textblob(self, text, lang='en'):
         if lang == 'de':
@@ -233,11 +239,25 @@ class TextBlobRunner(runner.BaseJobExecutor):
         data['sentences'] = list(map(lambda x: str(x), blob.sentences))
         data['success'] = True
         return data
+    def page(self, params):
+        p = b.Page(owner=self)
+        p.h2("TextBlobRunner")
+        p('<form>')
+        p('<input type="hidden" name="type" value="' + self.type + '" />')
+        p('<input type="text" name="text" value="" />')
+        p('<input type="submit" name="submit" value="Execute" />')
+        p('</form>')
+        if 'text' in params:
+            r = self.execute(params)
+            p.pre(json.dumps(r))
+        return p.nxui()
+
 
 # https://realpython.com/natural-language-processing-spacy-python/
 # Named Entity Recognition
 # nlp = spacy.load("en_core_web_sm")
 # https://spacy.io/models/de
+
 
 class NlpPipeline(runner.Pipeline):
     def __init__(self):
@@ -248,7 +268,7 @@ class AnalyseMain(runner.AutoDispatcher):
         super().__init__('type', **{
             'nlp': NlpPipeline(),
             'clip_embeddings': ClipEmbeddings(),
-            'bert_embeddings':BertEmbeddings(),
+            'bert_embeddings': BertEmbeddings(),
             'age_and_gender': AgeAndGenderRunner()
         })
 

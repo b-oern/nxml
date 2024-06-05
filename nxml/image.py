@@ -389,3 +389,49 @@ class ImageSimilarity(r.ImageExecutor):
         else:
             return {}
 
+
+class ObjectDetector(r.ImageExecutor):
+    """
+    https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
+    """
+    type = 'od'
+
+    def __init__(self):
+        import torch
+        from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+
+        self.model_id = "IDEA-Research/grounding-dino-tiny"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        self.model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device)
+
+
+    def executeImage(self, image, data):
+        import torch
+        # Check for cats and remote controls
+        # VERY important: text queries need to be lowercased + end with a dot
+        text = data.get('text', "a cat. a remote control.")
+
+        inputs = self.processor(images=image, text=text, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        results = self.processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            box_threshold=0.4,
+            text_threshold=0.3,
+            target_sizes=[image.size[::-1]]
+        )
+
+        # convert tensor of [x0,y0,x1,y1] to list of [x0,y0,x1,y1] (int)
+        boxes = results["boxes"].int().cpu().tolist()
+        pred_labels = results["labels"]
+        annot = [(tuple(box), pred_label) for box, pred_label in zip(boxes, pred_labels)]
+        return {
+            'boxes': boxes,
+            'annotations': annot,
+            'labels': pred_labels,
+            'request_text': text
+        }
+
