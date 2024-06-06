@@ -33,7 +33,8 @@ if __name__ == '__main__':
                 'qa = nxml.nlp:QuestionAnswering',
                 'text_classifier = nxml.nlp:TextClassifier',
                 'ttt = nxml.nlp:TextToText',
-                'od = nxml.image:ObjectDetector'
+                'od = nxml.image:ObjectDetector',
+                'ic = nxml.image:ImageClassifier'
             ]
         },
         classifiers=[

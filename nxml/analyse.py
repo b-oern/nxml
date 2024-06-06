@@ -15,7 +15,7 @@ class Whisper(runner.BaseJobExecutor):
 
     type = 'whisper'
     def __init__(self):
-	    # TODO search for ffmpeg in path
+	    # TODO search for ffmpeg in path  os.environ['PATH'] os.pathsep
         import whisper
         self.model = whisper.load_model("base")
     def execute(self, data):
@@ -140,6 +140,7 @@ class NsfwDetector(runner.ImageExecutor):
         data['sexy'] = res['sexy']
         return data
 
+
 class AgeAndGenderRunner(runner.ImageExecutor):
     def __init__(self, args: util.Args = {}):
         from age_and_gender import AgeAndGender
@@ -193,7 +194,6 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         text_features = self.model.get_text_features(**text_inputs)
         return text_features.cpu().detach().numpy()
 
-
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
         import torch
@@ -213,6 +213,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
             data['features'] = self.calculate_image_embedding(img).tolist()
             data['success'] = True
         return data
+
 
 class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob', 'textblob_de']

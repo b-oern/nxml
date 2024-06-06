@@ -392,6 +392,8 @@ class ImageSimilarity(r.ImageExecutor):
 
 class ObjectDetector(r.ImageExecutor):
     """
+    https://huggingface.co/IDEA-Research/grounding-dino-tiny
+
     https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
     """
     type = 'od'
@@ -435,3 +437,41 @@ class ObjectDetector(r.ImageExecutor):
             'request_text': text
         }
 
+
+
+class ImageClassifier(r.ImageExecutor):
+    """
+        https://github.com/pharmapsychotic/clip-interrogator
+    """
+
+    MODULES = ['clip_interrogator']
+
+    type = 'ic'
+
+    classes = []
+
+    def __init__(self, classes=[]):
+        from clip_interrogator import Config, Interrogator, LabelTable
+        self.ci = Interrogator(Config())
+        self.LT = LabelTable
+        self.classes = classes
+
+    def similarity(self, images_features, text):
+        return self.ci.similarity(images_features, text)
+
+    def get_list(self, list_data):
+        if isinstance(list_data, str):
+            return list_data.split(',')
+        return ['city', 'portrait', 'river', 'landscape']
+
+    def executeImage(self, image, data):
+        features = self.ci.image_to_features(image)
+        if 'rank' in data:
+            table = self.LT(self.get_list(data['rank']), 'terms', self.ci)
+            return {'result': table.rank(features, top_count=data.get('top', 2))}
+        if 'rank_c' in data:
+            table = self.LT(self.classes, 'terms', self.ci)
+            return {'result': table.rank(features, top_count=data.get('top', 2))}
+        if 'similarity' in data:
+            return {'result': self.similarity(features, data['similarity'])}
+        return {}
