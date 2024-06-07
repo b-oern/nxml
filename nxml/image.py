@@ -214,6 +214,11 @@ class ImageEmbeddingCreator(r.ImageExecutor):
         t = self.nc.doc(guid_to)
         f.setMetaValue('image_similarity', str(t.id()), str(score))
 
+    def query_image(self, data, image_key='image'):
+        img = self.get_image(image_key, data)
+        embedding = self.embedder.calculate_image_embedding(img)
+        return self.knn_q(embedding, int(data.get('k', 5)))
+
     def execute(self, data):
         if 'inference' in data:
             return self.inference()
@@ -221,9 +226,9 @@ class ImageEmbeddingCreator(r.ImageExecutor):
             q = data['q'] if data['q'] != '' else data['text']
             return self.knn_q_text(q, int(data.get('k', 5)))
         elif 'image' in data:
-            img = self.get_image('image', data)
-            embedding = self.embedder.calculate_image_embedding(img)
-            return self.knn_q(embedding, int(data.get('k', 5)))
+            return self.query_image(data, 'image')
+        elif 'file0' in data:
+            return self.query_image(data, 'file0')
         return super().execute(data)
 
 
@@ -387,7 +392,7 @@ class ImageSimilarity(r.ImageExecutor):
         if 'search' in data:
             return self.searchSimilar(image, data)
         else:
-            return {}
+            return {'success': False, 'message': 'ImageSimilarity.executeImage'}
 
 
 class ObjectDetector(r.ImageExecutor):

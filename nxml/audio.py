@@ -88,3 +88,18 @@ class VoiceAssitant(r.BaseJobExecutor):
 
     def execute(self, data):
         return super().execute(data)
+
+
+class AudioGenerator(r.BaseJobExecutor):
+    """
+    see also https://huggingface.co/spaces/artificialguybr/Stable-Audio-Open-Zero
+    https://huggingface.co/facebook/musicgen-small
+    """
+    def __init__(self):
+        from transformers import pipeline
+        self.synthesiser = pipeline("text-to-audio", "facebook/musicgen-small")
+
+    def generate(self, prompt="lo-fi music with a soothing melody", data={}):
+        import scipy
+        music = self.synthesiser(prompt, forward_params={"do_sample": True})
+        scipy.io.wavfile.write("musicgen_out.wav", rate=music["sampling_rate"], data=music["audio"])
