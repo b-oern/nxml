@@ -4,6 +4,7 @@ import random
 from nwebclient import NWebClient
 from nwebclient import runner as r
 from nwebclient import base as b
+from nwebclient.nlp import ParagraphParser
 
 
 class DynamicPrompt:
@@ -122,3 +123,66 @@ class TextClassifier(r.BaseJobExecutor):
         if 'group' in data:
             return self.run_group(**data)
         return super().execute(data)
+
+
+class TextWorker(r.BaseJobExecutor):
+
+    sentence_runner = {}
+
+    def __init__(self, sentence_runner={}):
+        self.sentence_runner = sentence_runner
+        if 'de' == sentence_runner:
+            self.sentence_runner = {
+                'grammar': TextToText(TextToText.DE_GRAMMAR),
+                'paraphrase': TextToText(TextToText.DE_PARAPHRASE)
+            }
+    def execute(self, data):
+        if 'text' in data:
+            return self.process_text(data['text'], data)
+        if 'sentence' in data:
+            return self.process_sentence(data['text'], data)
+        return super().execute(data)
+
+    def process_text(self, text, data={}):
+        result = []
+        p = ParagraphParser(text)
+        for sentence in p.paragraphs():
+            result.append(self.process_sentence(sentence))
+        return {'result': result}
+
+    def process_sentence(self, text, data={}):
+        result = {
+            'orginal_text': text
+        }
+        for srk in self.sentence_runner.keys():
+            result[srk] = self.sentence_runner[srk].execute({'text': text})
+        return result
+
+    def format_html(self, data):
+        p = b.Page()
+        if 'result' in data:
+            p('<table>')
+            for item in data['result']:
+                p('<tr>')
+                p('<td>'+item['orginal_text']+'</td>')
+                p('<td>')
+                if 'paraphrase' in item:
+                    p(item['paraphrase'])
+                p('</td>')
+                p('</tr>')
+            p('<table>')
+        return str(p)
+
+    def page(self, params={}):
+        p = b.Page(owner=self)
+        p.h1("Text Worker")
+        p('<form>')
+        p('<input type="hidden" name="type" value="' + self.type + '" />')
+        p('<textarea name="text"></textarea>')
+        p('<input type="submit" name="submit" value="Execute" />')
+        p('</form>')
+        if 'text' in params:
+            res = self.process_text(params['prompt'])
+            p.div(self.format_html(res))
+        return p.nxui()
+
