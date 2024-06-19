@@ -1,6 +1,6 @@
 import setuptools
 
-version = "1.0.2"
+version = "1.0.3"
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -35,7 +35,8 @@ if __name__ == '__main__':
                 'ttt = nxml.nlp:TextToText',
                 'tw = nxml.nlp:TextWorker',
                 'od = nxml.image:ObjectDetector',
-                'ic = nxml.image:ImageClassifier'
+                'ic = nxml.image:ImageClassifier',
+                'summarize = nxml.nlp:TextSummarization'
             ]
         },
         classifiers=[

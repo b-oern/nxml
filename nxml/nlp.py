@@ -182,7 +182,46 @@ class TextWorker(r.BaseJobExecutor):
         p('<input type="submit" name="submit" value="Execute" />')
         p('</form>')
         if 'text' in params:
-            res = self.process_text(params['prompt'])
+            res = self.process_text(params['text'])
             p.div(self.format_html(res))
         return p.nxui()
 
+
+class TextSummarization(r.BaseJobExecutor):
+    """
+    https://huggingface.co/sshleifer/distilbart-cnn-12-6
+    """
+    type = "summarize"
+
+    def __init__(self):
+        from transformers import pipeline
+        self.pipe = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+    def summerize(self, text) -> dict:
+        """
+        Key: summary_text
+        :param text:
+        :return: object
+        """
+        return self.pipe(text)[0]
+
+    def execute(self, data):
+        if 'text' in data:
+            return self.summerize(data['text'])
+        return super().execute(data)
+
+    def page(self, params={}):
+        p = b.Page(owner=self)
+        p.h1("TextSummarization")
+        p('<form>')
+        p('<input type="hidden" name="type" value="' + self.type + '" />')
+        p('<textarea name="text"></textarea>')
+        p('<input type="submit" name="submit" value="Summarize" />')
+        p('</form>')
+        if 'text' in params:
+            res = self.summerize(params['text'])
+            p.div(self.format_html(res))
+        return p.nxui()
+
+    def format_html(self, data):
+        return '<div>'+data['summary_text']+'</div>'
