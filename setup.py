@@ -36,7 +36,8 @@ if __name__ == '__main__':
                 'tw = nxml.nlp:TextWorker',
                 'od = nxml.image:ObjectDetector',
                 'ic = nxml.image:ImageClassifier',
-                'summarize = nxml.nlp:TextSummarization'
+                'summarize = nxml.nlp:TextSummarization',
+                'mail_respond = nxml.nlp:MailRespond'
             ]
         },
         classifiers=[
