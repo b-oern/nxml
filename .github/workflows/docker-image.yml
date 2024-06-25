@@ -17,7 +17,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag nxml:$(date +%s)
+    # --platform linux/amd64,linux/arm64
+      run: docker buildx build . --file Dockerfile --tag nxml:$(date +%s)
 
 
 
