@@ -1,5 +1,6 @@
 import json
 import random
+import uuid
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
@@ -11,25 +12,30 @@ from nwebclient.nlp import ParagraphParser
 
 def text_input_form(runner, p: b.Page, text='', caption="Execute",
                     t='textarea', input_name='text', html=''):
-    p('<form method="POST" class="text_input_form">')
+    hid = str(uuid.uuid4()).replace('-', '')
+    p('<form method="POST" class="text_input_form" id="'+hid+'">')
     p('<input type="hidden" name="type" value="' + getattr(runner, 'type','') + '" />')
     if t == 'input':
         p('<input type="text" name="'+input_name+'" value="' + text + '" />')
     else:
         p('<textarea name="'+input_name+'">'+text+'</textarea>')
+        p('<button>Paste</button>')
     p(html)
     p('<input type="submit" name="submit" value="'+caption+'" />')
     p('</form>')
-    #const pasteButton = document.querySelector('#paste-button');
-    #pasteButton.addEventListener('click', async () = > {
-    #try {
-    #const text = await navigator.clipboard.readText()
-    #document.querySelector('textarea').value += text;
-    #console.log('Text pasted.');
-    #} catch (error) {
-    #console.log('Failed to read clipboard');
-    #}
-    #});
+    p.script(w.js_ready(""" 
+        const hid = '""" + hid + """ ';
+        const pasteButton = document.querySelector('#'+hid+' button');
+        pasteButton.addEventListener('click', async () = > {
+            try {
+                const text = await navigator.clipboard.readText()
+                document.querySelector(hid).value += text;
+                console.log('Text pasted.');
+            } catch (error) {
+                console.log('Failed to read clipboard');
+            }
+        });
+    """))
 
 
 
