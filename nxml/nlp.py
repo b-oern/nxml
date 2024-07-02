@@ -57,7 +57,73 @@ class DynamicPrompt:
         return t.render()
 
 
-class TextToText(r.BaseJobExecutor):
+class TextExecutor(r.BaseJobExecutor):
+    """
+        Executor zur Textarbeit
+    """
+
+    def execute_text(self, text, data={}):
+        return {'success': False, 'message': "TextExecutor::execute_text() not overwritten"}
+
+    def remove_html(self,text):
+        from bs4 import BeautifulSoup
+        return BeautifulSoup(text, "lxml").text
+
+    def execute_doc(self, document_id, data={}):
+        nw = NWebClient(None)
+        d = nw.doc(document_id)
+        text = d.content()
+        if d.is_kind('markup'):
+            text = self.remove_html(text)
+        return self.execute_text(text, data)
+
+
+    def get_title(self):
+        return getattr(self, 'title', 'Text')
+
+    def execute(self, data):
+        if 'text' in data:
+            return self.execute_text(data['text'], data)
+        if 'document_id' in data:
+            return self.execute_doc(data['document_id'], data)
+        return super().execute(data)
+
+    def format_html(self, data):
+        return '<pre>' + json.dumps(data) + '</pre>'
+
+    def part_nweb_docs(self, p:b.Page, params={}):
+        try:
+            if 'document_id' in params:
+                r = self.execute_doc(params['document_id'])
+                p.div(self.format_html(r))
+            nw = NWebClient(None)
+            # TODO suchbox
+            docs = nw.docs('kind=markup&limit=20&orderby=changed')
+            p('<div class="nweb_docs nweb_doc_select">')
+            for doc in docs:
+                p.div(w.a(doc.title(), '?type' + self.type + '&document_id=' + str(doc.id())), _class='.doc')
+            p('</div>')
+        except Exception as e:
+            p.div("Error: " + str(e))
+
+    def page(self, params):
+        p = b.Page(owner=self)
+        if 'a' in params:
+            pass
+            # TODO dispatch
+        p('<div class="TextExecutor runner_page">')
+        p.h2(self.get_title())
+        text_input_form(self, p, t='textarea', input_name='text', text=params.get('text', ''))
+        if 'text' in params:
+            r = self.execute_text(params['text'])
+            p.div(self.format_html(r))
+        self.part_nweb_docs(p, params)
+        p('</div>')
+        return p.nxui()
+
+
+
+class TextToText(TextExecutor):
     """
     ramsrigouthamg/t5-large-paraphraser-diverse-high-quality
     """
@@ -67,6 +133,7 @@ class TextToText(r.BaseJobExecutor):
 
     type = 'ttt'
     model_name = ''
+    title = 'Text2Text'
     def __init__(self, model="Lelon/t5-german-paraphraser-large"):
         from transformers import pipeline
         self.param_names['text'] = "Texteingabe"
@@ -77,10 +144,8 @@ class TextToText(r.BaseJobExecutor):
         # pipe liefert [{'generated_text': 'Ich kann heute nicht pünktlich sein.'}]
         return self.pipe(text)[0]
 
-    def execute(self, data):
-        if 'text' in data:
-            return self.generate(data['text'])
-        return super().execute(data)
+    def execute_text(self, text, data):
+        return self.generate(text)
 
     def page(self, params):
         p = b.Page(owner=self)
@@ -154,7 +219,7 @@ class TextClassifier(r.BaseJobExecutor):
         return super().execute(data)
 
 
-class TextWorker(r.BaseJobExecutor):
+class TextWorker(TextExecutor):
 
     sentence_runner = {}
 
@@ -173,7 +238,7 @@ class TextWorker(r.BaseJobExecutor):
             return self.process_sentence(data['text'], data)
         return super().execute(data)
 
-    def process_text(self, text, data={}):
+    def execute_text(self, text, data={}):
         result = []
         p = ParagraphParser(text)
         for sentence in p.paragraphs():
@@ -203,17 +268,8 @@ class TextWorker(r.BaseJobExecutor):
             p('<table>')
         return str(p)
 
-    def page(self, params={}):
-        p = b.Page(owner=self)
-        p.h1("Text Worker")
-        text_input_form(self, p)
-        if 'text' in params:
-            res = self.process_text(params['text'])
-            p.div(self.format_html(res))
-        return p.nxui()
 
-
-class TextSummarization(r.BaseJobExecutor):
+class TextSummarization(TextExecutor):
     """
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
@@ -234,10 +290,8 @@ class TextSummarization(r.BaseJobExecutor):
         res = self.pipe(text)[0]
         return res
 
-    def execute(self, data):
-        if 'text' in data:
-            return self.summerize(data['text'])
-        return super().execute(data)
+    def execute_text(self, text, data={}):
+        return self.summerize(text)
 
     def page(self, params={}):
         p = b.Page(owner=self)
