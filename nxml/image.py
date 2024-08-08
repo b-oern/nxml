@@ -480,3 +480,88 @@ class ImageClassifier(r.ImageExecutor):
         if 'similarity' in data:
             return {'result': self.similarity(features, data['similarity'])}
         return {}
+
+
+class DocumentAnalysis(r.ImageExecutor):
+    MODULES = ['git+https://github.com/THU-MIG/yolov10.git']
+    # pycocotools==2.0.7
+    # PyYAML==6.0.1
+    # scipy==1.13.0
+    # gradio==4.31.5
+    # opencv-python==4.9.0.80
+    # psutil==5.9.8
+    # py-cpuinfo==9.0.0
+
+    ENTITIES_COLORS = {
+        "Caption": (191, 100, 21),
+        "Footnote": (2, 62, 115),
+        "Formula": (140, 80, 58),
+        "List-item": (168, 181, 69),
+        "Page-footer": (2, 69, 84),
+        "Page-header": (83, 115, 106),
+        "Picture": (255, 72, 88),
+        "Section-header": (0, 204, 192),
+        "Table": (116, 127, 127),
+        "Text": (0, 153, 221),
+        "Title": (196, 51, 2)
+    }
+    BOX_PADDING = 2
+
+    def __init__(self):
+        import cv2
+        from ultralytics import YOLO
+        self.cv2 = cv2
+        # https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt
+        self.DETECTION_MODEL = YOLO("models/yolov10x_best.pt")
+
+    def executeImage(self, image, data):
+        #image = cv2.imread(image_path)
+        import numpy
+        image = self.cv2.cvtColor(numpy.array(image), self.cv2.COLOR_RGB2BGR)
+        results = self.DETECTION_MODEL.predict(source=image, conf=0.2, iou=0.8)  # Predict on image
+        boxes = results[0].boxes  # Get bounding boxes
+
+        if len(boxes) == 0:
+            return image
+
+        # Get bounding boxes
+        for box in boxes:
+            detection_class_conf = round(box.conf.item(), 2)
+            cls = list(self.ENTITIES_COLORS)[int(box.cls)]
+            # Get start and end points of the current box
+            start_box = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
+            end_box = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
+
+            # 01. DRAW BOUNDING BOX OF OBJECT
+            # Adjust the scale factors for bounding box and label
+            box_scale_factor = 0.001  # Reduce this value to make the bounding box thinner
+            label_scale_factor = 0.5  # Reduce this value to make the label smaller
+
+            # 01. DRAW BOUNDING BOX OF OBJECT
+            line_thickness = round(box_scale_factor * (image.shape[0] + image.shape[1]) / 2) + 1
+            image = self.cv2.rectangle(img=image, pt1=start_box, pt2=end_box,
+                                  color=self.ENTITIES_COLORS[cls],
+                                  thickness=line_thickness)  # Draw the box with predefined colors
+            # 02. DRAW LABEL
+            text = cls + " " + str(detection_class_conf)
+            # Get text dimensions to draw wrapping box
+            font_thickness = max(line_thickness - 1, 1)
+            (font_scale_w, font_scale_h) = (line_thickness * label_scale_factor, line_thickness * label_scale_factor)
+            (text_w, text_h), _ = self.cv2.getTextSize(text=text, fontFace=2, fontScale=font_scale_w,
+                                                  thickness=font_thickness)
+            # Draw wrapping box for text
+            image = self.cv2.rectangle(img=image,
+                                  pt1=(start_box[0], start_box[1] - text_h - self.BOX_PADDING * 2),
+                                  pt2=(start_box[0] + text_w + self.BOX_PADDING * 2, start_box[1]),
+                                  color=self.ENTITIES_COLORS[cls],
+                                  thickness=-1)
+            # Put class name on image
+            start_text = (start_box[0] + self.BOX_PADDING, start_box[1] - self.BOX_PADDING)
+            image = self.cv2.putText(img=image, text=text, org=start_text, fontFace=0, color=(255, 255, 255),
+                                fontScale=font_scale_w, thickness=font_thickness)
+        #color_converted = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
+        #pil_image = Image.fromarray(color_converted)
+
+        # TODO encode for JSON
+        return image
+
