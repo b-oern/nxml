@@ -511,8 +511,17 @@ class DocumentAnalysis(r.ImageExecutor):
         import cv2
         from ultralytics import YOLO
         self.cv2 = cv2
-        # https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt
-        self.DETECTION_MODEL = YOLO("models/yolov10x_best.pt")
+        if not os.path.exists("yolov10x_best.pt"):
+            url = 'https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt'
+            u.download(url, "yolov10x_best.pt")
+        self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
+
+    def pillow_image_to_base64_string(self, img):
+        import base64
+        import io
+        buffered = io.BytesIO()
+        img.save(buffered, format="JPEG")
+        return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
     def executeImage(self, image, data):
         #image = cv2.imread(image_path)
@@ -522,7 +531,7 @@ class DocumentAnalysis(r.ImageExecutor):
         boxes = results[0].boxes  # Get bounding boxes
 
         if len(boxes) == 0:
-            return image
+            return {'success': False, 'message': "No Content Found"}
 
         # Get bounding boxes
         for box in boxes:
@@ -532,8 +541,7 @@ class DocumentAnalysis(r.ImageExecutor):
             start_box = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
             end_box = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
 
-            # 01. DRAW BOUNDING BOX OF OBJECT
-            # Adjust the scale factors for bounding box and label
+            # 01. DRAW BOUNDING BOX OF OBJECT    # Adjust the scale factors for bounding box and label
             box_scale_factor = 0.001  # Reduce this value to make the bounding box thinner
             label_scale_factor = 0.5  # Reduce this value to make the label smaller
 
@@ -547,8 +555,7 @@ class DocumentAnalysis(r.ImageExecutor):
             # Get text dimensions to draw wrapping box
             font_thickness = max(line_thickness - 1, 1)
             (font_scale_w, font_scale_h) = (line_thickness * label_scale_factor, line_thickness * label_scale_factor)
-            (text_w, text_h), _ = self.cv2.getTextSize(text=text, fontFace=2, fontScale=font_scale_w,
-                                                  thickness=font_thickness)
+            (text_w, text_h), _ = self.cv2.getTextSize(text=text, fontFace=2, fontScale=font_scale_w, thickness=font_thickness)
             # Draw wrapping box for text
             image = self.cv2.rectangle(img=image,
                                   pt1=(start_box[0], start_box[1] - text_h - self.BOX_PADDING * 2),
@@ -559,9 +566,9 @@ class DocumentAnalysis(r.ImageExecutor):
             start_text = (start_box[0] + self.BOX_PADDING, start_box[1] - self.BOX_PADDING)
             image = self.cv2.putText(img=image, text=text, org=start_text, fontFace=0, color=(255, 255, 255),
                                 fontScale=font_scale_w, thickness=font_thickness)
-        #color_converted = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
-        #pil_image = Image.fromarray(color_converted)
+        color_converted = self.cv2.cvtColor(image, self.cv2.COLOR_BGR2RGB)
+        from PIL import Image
+        pil_image = Image.fromarray(color_converted)
 
-        # TODO encode for JSON
-        return image
+        return {'image': self.pillow_image_to_base64_string(pil_image)}
 
