@@ -13,6 +13,7 @@ from nwebclient import runner as r
 from nwebclient import NWebClient
 from nwebclient import NWebDoc
 from nwebclient import util as u
+from nwebclient import base as b
 
 from nxml import analyse
 
@@ -522,6 +523,12 @@ class DocumentAnalysis(r.ImageExecutor):
         buffered = io.BytesIO()
         img.save(buffered, format="JPEG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    def page_index(self, params={}):
+        p = b.Page(owner=self)
+        p.h1("DocumentAnalysis")
+        # TODO
+        return p.simple_page()
 
     def executeImage(self, image, data):
         #image = cv2.imread(image_path)

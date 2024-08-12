@@ -1,35 +1,9 @@
-# nxml
-Docker Base Image for Maschine Learning
+# NLP
 
-Start Docker Image:
-```
-docker run --rm -it -p 7070:7070 ghcr.io/b-oern/nxml:main
-```
+Analyisert einen Text.
 
-Query Service with:
-```
-curl 'http://127.0.0.1:7070/?type=nlp&text=Good%20morning'
-```
-```json
-{
-  "text": "Good morning",
-  "ner": [{"start_position": 5, "end_position": 12, "text": "morning", "tag": "TIME"}],
-  "success": true,
-  "lang": "en",
-  "words": ["Good", "morning"],
-  "sentimnet": {"polarity": 0.7, "subjectivity": 0.6000000000000001},
-  "sentimnet_polarity": 0.7,
-  "sentimnet_subjectivity": 0.6000000000000001,
-  "sentences": ["Good morning"]
-}
-```
+Folgende Features werden ermittelt
 
-
-```
-docker run --rm -it nxml bash
-```
-
-## Build
-```
-docker build . -t nxml
-```
+ - `lang` Sprache (`en`, `de`, ...)
+ - `toxity` Wie viel Hate steckt im Text, unterteilt in {'toxicity': 0.00019621708, 'severe_toxicity': 0.00019254998, 'obscene': 0.0012626372, 'identity_attack': 0.0003226225, 'insult': 0.0008828422, 'threat': 0.00013756882, 'sexual_explicit': 9.029167e-05}
+ - `words` Array von Wörtern
