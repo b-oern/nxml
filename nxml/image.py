@@ -484,6 +484,11 @@ class ImageClassifier(r.ImageExecutor):
 
 
 class DocumentAnalysis(r.ImageExecutor):
+    """
+      Docker in docker/document_analysis.sh
+
+
+    """
     MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
     # pycocotools==2.0.7
     # PyYAML==6.0.1
