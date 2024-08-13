@@ -524,7 +524,7 @@ class DocumentAnalysis(r.ImageExecutor):
         img.save(buffered, format="JPEG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    def page_index(self, params={}):
+    def page(self, params={}):
         p = b.Page(owner=self)
         p.h1("DocumentAnalysis")
         # TODO
