@@ -484,7 +484,7 @@ class ImageClassifier(r.ImageExecutor):
 
 
 class DocumentAnalysis(r.ImageExecutor):
-    MODULES = ['git+https://github.com/THU-MIG/yolov10.git']
+    MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
     # pycocotools==2.0.7
     # PyYAML==6.0.1
     # scipy==1.13.0
@@ -528,7 +528,10 @@ class DocumentAnalysis(r.ImageExecutor):
         p = b.Page(owner=self)
         p.h1("DocumentAnalysis")
         # TODO
-        return p.simple_page()
+        f = '/home/pi/data_buchseite.jpg'
+        r = self.execute({'image': f})
+        p(f'<img src="data:image/png;base64,{r["image"]}" />')
+        return p.nxui()
 
     def executeImage(self, image, data):
         #image = cv2.imread(image_path)
