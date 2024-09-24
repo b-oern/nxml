@@ -1,6 +1,6 @@
 import setuptools
 
-version = "1.0.3"
+version = "1.0.4"
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -16,6 +16,8 @@ if __name__ == '__main__':
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
         packages=['nxml'],
+        package_data={'nxml': ['docker/*']},
+        include_package_data=True,
         entry_points={
             'console_scripts': [],
             'nweb_runner': [
@@ -38,7 +40,8 @@ if __name__ == '__main__':
                 'ic = nxml.image:ImageClassifier',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
-                'document = nxml.image:DocumentAnalysis'
+                'document = nxml.image:DocumentAnalysis',
+                'document_dockered = nxml.image:DocumentAnalysisDockerd'
             ]
         },
         classifiers=[

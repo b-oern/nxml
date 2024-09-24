@@ -485,7 +485,7 @@ class ImageClassifier(r.ImageExecutor):
 
 class DocumentAnalysis(r.ImageExecutor):
     """
-      Docker in docker/document_analysis.sh
+      Docker in nxml/docker/document_analysis.sh
 
 
     """
@@ -600,3 +600,22 @@ class DocumentAnalysis(r.ImageExecutor):
         return {'image': self.pillow_image_to_base64_string(pil_image),
                 'items': items}
 
+
+class DocumentAnalysisDockerd(r.ImageExecutor):
+    def __init__(self):
+        import pkg_resources
+        path = pkg_resources.resource_filename('nxml', 'docker') + '/'
+        # /home/pi/.local/lib/python3.10/site-packages/nxml/docker/
+        os.chdir(path)
+        dockerfile = 'DocumentAnalysis.Dockerfile'
+        cmd = f'docker build -t document-analysis -f {dockerfile} .'
+        self.info("Build Docker Container")
+        r.ProcessExecutor(cmd, on_line=print, on_end=self.on_image_builded)
+
+    def on_image_builded(self):
+        cmd = 'docker run --rm -it -p 27201:7070  document-analysis'
+        self.info("RUN: " + cmd)
+        self.p = r.ProcessExecutor(cmd, on_line=print)
+
+    def execute(self, data):
+        return {}
