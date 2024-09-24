@@ -1,5 +1,6 @@
 #
-# ~/dev/nxml/docker$ docker build -t document-analysis -f DocumentAnalysis.Dockerfile ..
+# ~/dev/nxml/$ docker build -t document-analysis -f docker/DocumentAnalysis.Dockerfile .
+# $ docker run --rm -it -p 7070:7070 -w /yolov10 document-analysis
 #
 FROM nxware/nxdev
 COPY docker/document_analysis.sh /document_analysis.sh

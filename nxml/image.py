@@ -532,10 +532,11 @@ class DocumentAnalysis(r.ImageExecutor):
     def page(self, params={}):
         p = b.Page(owner=self)
         p.h1("DocumentAnalysis")
-        # TODO
+        # TODO impl
         f = '/home/pi/data_buchseite.jpg'
         r = self.execute({'image': f})
         p(f'<img src="data:image/png;base64,{r["image"]}" />')
+        p.pre(json.dumps(r))
         return p.nxui()
 
     def executeImage(self, image, data):
@@ -548,6 +549,8 @@ class DocumentAnalysis(r.ImageExecutor):
         if len(boxes) == 0:
             return {'success': False, 'message': "No Content Found"}
 
+        items = []
+
         # Get bounding boxes
         for box in boxes:
             detection_class_conf = round(box.conf.item(), 2)
@@ -555,6 +558,15 @@ class DocumentAnalysis(r.ImageExecutor):
             # Get start and end points of the current box
             start_box = (int(box.xyxy[0][0]), int(box.xyxy[0][1]))
             end_box = (int(box.xyxy[0][2]), int(box.xyxy[0][3]))
+
+            items.append({
+                'cls': str(cls),
+                'x1': int(box.xyxy[0][0]),
+                'y1': int(box.xyxy[0][1]),
+                'x2': int(box.xyxy[0][2]),
+                'y2': int(box.xyxy[0][3]),
+                'detection': float(detection_class_conf)
+            })
 
             # 01. DRAW BOUNDING BOX OF OBJECT    # Adjust the scale factors for bounding box and label
             box_scale_factor = 0.001  # Reduce this value to make the bounding box thinner
@@ -585,5 +597,6 @@ class DocumentAnalysis(r.ImageExecutor):
         from PIL import Image
         pil_image = Image.fromarray(color_converted)
 
-        return {'image': self.pillow_image_to_base64_string(pil_image)}
+        return {'image': self.pillow_image_to_base64_string(pil_image),
+                'items': items}
 
