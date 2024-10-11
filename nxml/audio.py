@@ -118,7 +118,7 @@ class FFmpeg(r.BaseJobExecutor):
 
 
 class ElevenLabs(r.BaseJobExecutor):
-    type='tts'
+    type = 'tts'
     voices = {
         'Otto': 'FTNCalFNG5bRnkkaP5Ug'
     }
@@ -147,7 +147,7 @@ class ElevenLabs(r.BaseJobExecutor):
             }
         })
         filename = str(hashlib.md5(text.encode()).hexdigest()) + '.mp3'
-        response = requests.post(self.url, data=data, headers=headers, stream=True)
+        response = requests.post(self.url(), data=data, headers=headers, stream=True)
         if response.status_code == 200:
             with open(filename, 'wb') as f:
                 for chunk in r:
