@@ -161,7 +161,7 @@ class ElevenLabs(r.BaseJobExecutor):
             print(f"[util.download] Faild, Status: {response.status_code}")
         return {
             'filename': filename,
-            'data': base64.b64encode(u.file_get_contents()).decode('utf-8'),
+            'data': base64.b64encode(u.file_get_contents(filename)).decode('utf-8'),
             'response': response.status_code
         }
 
