@@ -1,4 +1,4 @@
-
+import base64
 import json
 import hashlib
 
@@ -118,6 +118,9 @@ class FFmpeg(r.BaseJobExecutor):
 
 
 class ElevenLabs(r.BaseJobExecutor):
+    """
+      "tts": "nxml.audio:ElevenLabs"
+    """
     type = 'tts'
     voices = {
         'Otto': 'FTNCalFNG5bRnkkaP5Ug'
@@ -140,11 +143,11 @@ class ElevenLabs(r.BaseJobExecutor):
         }
         data = {
             "text": text,
-            "model_id": "eleven_multilingual_v2",
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.5
-            }
+            "model_id": "eleven_multilingual_v2" #,
+            #"voice_settings": {
+            #    "stability": 0.5,
+            #    "similarity_boost": 0.5
+            #}
         }
         filename = str(hashlib.md5(text.encode()).hexdigest()) + '.mp3'
         response = requests.post(self.url(), json=data, headers=headers, stream=True)
@@ -156,6 +159,7 @@ class ElevenLabs(r.BaseJobExecutor):
             print(f"[util.download] Faild, Status: {response.status_code}")
         return {
             'filename': filename,
+            'data': base64.b64encode(u.file_get_contents()).decode('utf-8'),
             'response': response.status_code
         }
 
