@@ -21,6 +21,9 @@ class Whisper(runner.BaseJobExecutor):
         self.model = whisper.load_model("base")
 
     def execute(self, data):
+        if 'url' in data:
+            util.download(data['url'], 'audiofile.dat', False)
+            data['audio'] = 'audiofile.dat'
         if not 'audio' in data and 'file0' in data:
             util.file_put_contents('audiofile.dat', base64.b64decode(data['file0']))
             data['audio'] = 'audiofile.dat'
