@@ -38,7 +38,8 @@ if __name__ == '__main__':
                 'ic = nxml.image:ImageClassifier',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
-                'document = nxml.image:DocumentAnalysis'
+                'document = nxml.image:DocumentAnalysis',
+                'whisper = nxml.analyse:Whisper'
             ]
         },
         classifiers=[

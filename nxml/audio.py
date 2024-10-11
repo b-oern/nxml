@@ -1,6 +1,9 @@
 
+import json
+import hashlib
 
 from nwebclient import runner as r
+from nwebclient import util as u
 
 
 class LibRosa(r.BaseJobExecutor):
@@ -103,3 +106,56 @@ class AudioGenerator(r.BaseJobExecutor):
         import scipy
         music = self.synthesiser(prompt, forward_params={"do_sample": True})
         scipy.io.wavfile.write("musicgen_out.wav", rate=music["sampling_rate"], data=music["audio"])
+
+class FFmpeg(r.BaseJobExecutor):
+    MODULES = ['ffmpeg-python']
+    def execute(self, data):
+        import ffmpeg
+        if 'duration' in data:
+            return {'duration': ffmpeg.probe(data['duration'])['format']['duration']}
+        # print(ffmpeg.probe('in.mp4')['format']['duration'])
+        return super().execute(data)
+
+
+class ElevenLabs(r.BaseJobExecutor):
+    def __init__(self, api_key=None, voice_id='FTNCalFNG5bRnkkaP5Ug', args:u.Args={}):
+        if api_key is None:
+            api_key = args.get("elevenlabs_api_key", '')
+        self.api_key = api_key
+        self.voice_id = voice_id
+
+    def url(self):
+        return 'https://api.elevenlabs.io/v1/text-to-speech/' + self.voice_id
+
+    def request(self, text: str):
+        import requests
+        headers = {
+            'accept: audio/mpeg',
+            'xi-api-key: <xi-api-key>',
+            'Content-Type: application/json',
+        }
+        data = json.dumps({
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.5
+            }
+        })
+        filename = str(hashlib.md5(text.encode()).hexdigest()) + '.mp3'
+        response = requests.post(self.url, data=data, headers=headers, stream=True)
+        if response.status_code == 200:
+            with open(filename, 'wb') as f:
+                for chunk in r:
+                    f.write(chunk)
+        else:
+            print(f"[util.download] Faild, Status: {response.status_code}")
+        return {
+            'filename': filename,
+            'response': response.status_code
+        }
+
+    def execute(self, data):
+        if 'tts' in data:
+            return self.request(data['tts'])
+        return super().execute(data)
