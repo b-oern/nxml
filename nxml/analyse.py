@@ -77,12 +77,13 @@ class Nltk(runner.BaseJobExecutor):
 
 
 class FlairRunner(runner.BaseJobExecutor):
+
     MODULES = ['flair']
 
-    def __init__(self):
+    def __init__(self, model="flair/ner-english-ontonotes-large"):
         try:
             from flair.models import SequenceTagger
-            self.tagger = SequenceTagger.load("flair/ner-english-ontonotes-large")
+            self.tagger = SequenceTagger.load(model)
         except (ImportError, ModuleNotFoundError) as e:
             print("Error: Init FlairRunner, " + str(e))
 
