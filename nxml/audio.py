@@ -122,6 +122,7 @@ class ElevenLabs(r.BaseJobExecutor):
       "tts": "nxml.audio:ElevenLabs"
     """
     type = 'tts'
+    CHUNK_SIZE =1024
     voices = {
         'Otto': 'FTNCalFNG5bRnkkaP5Ug'
     }
@@ -143,7 +144,7 @@ class ElevenLabs(r.BaseJobExecutor):
         }
         data = {
             "text": text,
-            "model_id": "eleven_multilingual_v2" ,
+            "model_id": "eleven_multilingual_v2",
             "voice_settings": {
                 "stability": 0.5,
                 "similarity_boost": 0.5
@@ -153,8 +154,9 @@ class ElevenLabs(r.BaseJobExecutor):
         response = requests.post(self.url(), json=data, headers=headers, stream=True)
         if response.status_code == 200:
             with open(filename, 'wb') as f:
-                for chunk in r:
-                    f.write(chunk)
+                for chunk in response.iter_content(chunk_size=self.CHUNK_SIZE):
+                    if chunk:
+                        f.write(chunk)
         else:
             print(f"[util.download] Faild, Status: {response.status_code}")
         return {
