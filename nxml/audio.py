@@ -118,6 +118,10 @@ class FFmpeg(r.BaseJobExecutor):
 
 
 class ElevenLabs(r.BaseJobExecutor):
+    type='tts'
+    voices = {
+        'Otto': 'FTNCalFNG5bRnkkaP5Ug'
+    }
     def __init__(self, api_key=None, voice_id='FTNCalFNG5bRnkkaP5Ug', args:u.Args={}):
         if api_key is None:
             api_key = args.get("elevenlabs_api_key", '')

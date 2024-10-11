@@ -11,6 +11,9 @@ import requests
 
 
 class Whisper(runner.BaseJobExecutor):
+    """
+      "whisper": "nxml.analyse:Whisper",
+    """
     MODULES = ['openai-whisper']
 
     type = 'whisper'

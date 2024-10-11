@@ -42,7 +42,8 @@ if __name__ == '__main__':
                 'mail_respond = nxml.nlp:MailRespond',
                 'document = nxml.image:DocumentAnalysis',
                 'whisper = nxml.analyse:Whisper',
-                'document_dockered = nxml.image:DocumentAnalysisDockerd'
+                'document_dockered = nxml.image:DocumentAnalysisDockerd',
+                'tts = nxml.audio:ElevenLabs'
             ]
         },
         classifiers=[
