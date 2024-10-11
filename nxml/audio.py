@@ -137,20 +137,20 @@ class ElevenLabs(r.BaseJobExecutor):
     def request(self, text: str):
         import requests
         headers = {
-            'accept: audio/mpeg',
-            'xi-api-key: ' + self.api_key,
-            'Content-Type: application/json'
+            'accept': 'audio/mpeg',
+            'xi-api-key': self.api_key,
+            'Content-Type': 'application/json'
         }
         data = {
             "text": text,
-            "model_id": "eleven_multilingual_v2" #,
-            #"voice_settings": {
-            #    "stability": 0.5,
-            #    "similarity_boost": 0.5
-            #}
+            "model_id": "eleven_multilingual_v2" ,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.5
+            }
         }
         filename = str(hashlib.md5(text.encode()).hexdigest()) + '.mp3'
-        response = requests.post(self.url(), data=data, headers=headers, stream=True)
+        response = requests.post(self.url(), json=data, headers=headers, stream=True)
         if response.status_code == 200:
             with open(filename, 'wb') as f:
                 for chunk in r:
