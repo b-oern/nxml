@@ -41,11 +41,8 @@ if __name__ == '__main__':
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
                 'document = nxml.image:DocumentAnalysis',
-<<<<<<< HEAD
-                'whisper = nxml.analyse:Whisper'
-=======
+                'whisper = nxml.analyse:Whisper',
                 'document_dockered = nxml.image:DocumentAnalysisDockerd'
->>>>>>> ec6825631380598e3c4b4d223057343dd98d540f
             ]
         },
         classifiers=[
