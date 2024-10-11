@@ -135,7 +135,7 @@ class ElevenLabs(r.BaseJobExecutor):
         import requests
         headers = {
             'accept: audio/mpeg',
-            'xi-api-key: <xi-api-key>',
+            'xi-api-key: ' + self.api_key,
             'Content-Type: application/json',
         }
         data = {
