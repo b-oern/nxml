@@ -487,6 +487,7 @@ class DocumentAnalysis(r.ImageExecutor):
     """
       Docker in nxml/docker/document_analysis.sh
 
+      Läuft aktuell nur auf x86
 
     """
     MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
