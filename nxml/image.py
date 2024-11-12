@@ -602,7 +602,12 @@ class DocumentAnalysis(r.ImageExecutor):
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
-    def __init__(self):
+    def __init__(self, build=True):
+        if build:
+            self.docker_build()
+
+
+    def docker_build(self):
         import pkg_resources
         path = pkg_resources.resource_filename('nxml', 'docker') + '/'
         # /home/pi/.local/lib/python3.10/site-packages/nxml/docker/
@@ -612,7 +617,7 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
         self.info("Build Docker Container")
         r.ProcessExecutor(cmd, on_line=print, on_end=self.on_image_builded)
 
-    def on_image_builded(self):
+    def on_image_builded(self, p):
         cmd = 'docker run --rm -it -p 27201:7070  document-analysis'
         self.info("RUN: " + cmd)
         self.p = r.ProcessExecutor(cmd, on_line=print)

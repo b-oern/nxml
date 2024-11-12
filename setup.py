@@ -1,6 +1,6 @@
 import setuptools
 
-version = "1.0.4"
+version = "1.0.5"
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -41,7 +41,8 @@ if __name__ == '__main__':
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
                 'document = nxml.image:DocumentAnalysis',
-                'document_dockered = nxml.image:DocumentAnalysisDockerd'
+                'document_dockered = nxml.image:DocumentAnalysisDockerd',
+                'rllm = nxml.llm:LLM'
             ]
         },
         classifiers=[
