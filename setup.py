@@ -44,7 +44,6 @@ if __name__ == '__main__':
                 'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'rllm = nxml.llm:LLM',
                 'whisper = nxml.analyse:Whisper',
-                'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'tts = nxml.audio:ElevenLabs'
             ]
         },
