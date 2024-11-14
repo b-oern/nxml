@@ -43,6 +43,7 @@ if __name__ == '__main__':
                 'document = nxml.image:DocumentAnalysis',
                 'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'rllm = nxml.llm:LLM',
+                'ollm = nxml.llm:OLLama',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs'
             ]

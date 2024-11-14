@@ -45,3 +45,22 @@ class LLM(r.BaseJobExecutor):
         p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
         p.div('', id='result')
         return p.nxui()
+
+
+class OLLama(r.BaseJobExecutor):
+
+    MODULES = ['ollama']
+
+    def __init__(self, type='ollm', args: u.Args = None):
+        super().__init__()
+        import ollama as o
+        self.ollama = o
+
+    def remote_prompt(self, data):
+        response = self.ollama.generate(model='llama3', prompt=data['prompt'])
+        return response
+
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.remote_prompt(data)
+        return super().execute(data)
