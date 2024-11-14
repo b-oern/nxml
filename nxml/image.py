@@ -27,6 +27,7 @@ class DatasetWriter:
     output_folder = './'
 
     def __init__(self, output_folder = './'):
+        super().__init__()
         self.output_folder = output_folder
 
     def create_metadata(self, img:NWebDoc, fname:str):
@@ -75,6 +76,7 @@ class ImageEmbeddingCreator(r.ImageExecutor):
     knn_ids = {}
 
     def __init__(self, embedding_folder='./', args:u.Args={}):
+        super().__init__()
         self.var_names.append("embedding_folder")
         self.var_names.append("threshold")
         if self.embedding_folder == embedding_folder and args.get('embedding_folder', None) is not None:
@@ -251,6 +253,9 @@ class ImageSimilarity(r.ImageExecutor):
 
     threshold = 0.9
 
+    def __init__(self):
+        super().__init__()
+
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
         from skimage import metrics
@@ -405,6 +410,7 @@ class ObjectDetector(r.ImageExecutor):
     type = 'od'
 
     def __init__(self):
+        super().__init__()
         import torch
         from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
@@ -457,6 +463,7 @@ class ImageClassifier(r.ImageExecutor):
     classes = []
 
     def __init__(self, classes=[]):
+        super().__init__()
         from clip_interrogator import Config, Interrogator, LabelTable
         self.ci = Interrogator(Config())
         self.LT = LabelTable
@@ -515,6 +522,7 @@ class DocumentAnalysis(r.ImageExecutor):
     BOX_PADDING = 2
 
     def __init__(self):
+        super().__init__()
         import cv2
         from ultralytics import YOLO
         self.cv2 = cv2
@@ -604,6 +612,7 @@ class DocumentAnalysis(r.ImageExecutor):
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
     def __init__(self, build=True):
+        super().__init__()
         if build:
             self.docker_build()
 
