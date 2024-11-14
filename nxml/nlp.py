@@ -44,6 +44,7 @@ class DynamicPrompt:
     {{firstname()}}   {{oneof("sagt", "schreibt")}}
     """
     def __init__(self):
+        super().__init__()
         from nwebclient import llm
         self.data = llm
         from jinja2.nativetypes import NativeEnvironment
@@ -67,6 +68,9 @@ class TextExecutor(r.BaseJobExecutor):
     """
         Executor zur Textarbeit
     """
+
+    def __init__(self):
+        super().__init__()
 
     def execute_text(self, text, data={}):
         return {'success': False, 'message': "TextExecutor::execute_text() not overwritten"}
@@ -141,6 +145,7 @@ class TextToText(TextExecutor):
     model_name = ''
     title = 'Text2Text'
     def __init__(self, model="Lelon/t5-german-paraphraser-large"):
+        super().__init__()
         from transformers import pipeline
         self.param_names['text'] = "Texteingabe"
         self.model_name = model
@@ -171,6 +176,7 @@ class QuestionAnswering(r.BaseJobExecutor):
     pipe = None
 
     def __init__(self, model="deepset/gelectra-base-germanquad"):
+        super().__init__()
         from transformers import pipeline
         self.pipe = pipeline("question-answering", model=model)
 
@@ -195,6 +201,7 @@ class TextClassifier(r.BaseJobExecutor):
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
     def __init__(self):
+        super().__init__()
         from transformers import pipeline
         self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
@@ -230,6 +237,7 @@ class TextWorker(TextExecutor):
     sentence_runner = {}
 
     def __init__(self, sentence_runner={}):
+        super().__init__()
         self.sentence_runner = sentence_runner
         self.param_names['text'] = "Texteingabe"
         if 'de' == sentence_runner:
@@ -282,6 +290,7 @@ class TextSummarization(TextExecutor):
     type = "summarize"
 
     def __init__(self, model="sshleifer/distilbart-cnn-12-6"):
+        super().__init__()
         from transformers import pipeline
         self.param_names['text'] = "Text der zusammengefasst werden soll"
         self.model = model
@@ -332,6 +341,7 @@ class MailRespond(r.BaseJobExecutor):
     mails = []
 
     def __init__(self, args: u.Args = {}):
+        super().__init__()
         print("Args: " + str(args))
         self.param_names['text'] = "Nachrichtentext für den eine Antwort erstellt werden soll."
 

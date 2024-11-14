@@ -19,6 +19,7 @@ class Whisper(runner.BaseJobExecutor):
     type = 'whisper'
 
     def __init__(self):
+        super().__init__()
         # TODO search for ffmpeg in path  os.environ['PATH'] os.pathsep
         import whisper
         self.model = whisper.load_model("base")
@@ -41,6 +42,7 @@ class Toxity(runner.BaseJobExecutor):
     text_key = 'text'
 
     def __init__(self):
+        super().__init__()
         from detoxify import Detoxify
         self.classifier_toxity = Detoxify('multilingual')
 
@@ -59,6 +61,7 @@ class Nltk(runner.BaseJobExecutor):
     MODULES = ['nltk']
 
     def __init__(self):
+        super().__init__()
         import nltk
         try:
             nltk.find('punkt')
@@ -87,6 +90,7 @@ class FlairRunner(runner.BaseJobExecutor):
     MODULES = ['flair']
 
     def __init__(self, model="flair/ner-english-ontonotes-large"):
+        super().__init__()
         try:
             from flair.models import SequenceTagger
             self.tagger = SequenceTagger.load(model)
@@ -125,6 +129,7 @@ class BertEmbeddings(runner.BaseJobExecutor):
     model = "all-MiniLM-L6-v2"
 
     def __init__(self):
+        super().__init__()
         from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
         self.embeddings = HuggingFaceEmbeddings(model_name=self.model)
 
@@ -147,6 +152,7 @@ class NsfwDetector(runner.ImageExecutor):
     model_filename = 'nsfw_detector.h5'
 
     def __init__(self):
+        super().__init__()
         from nsfw_detector import predict
         if not os.path.isfile(self.model_filename):
             print("[NsfwDetector] Downloading model")
@@ -166,6 +172,7 @@ class NsfwDetector(runner.ImageExecutor):
 
 class AgeAndGenderRunner(runner.ImageExecutor):
     def __init__(self, args: util.Args = {}):
+        super().__init__()
         from age_and_gender import AgeAndGender
         # apt install -y wget git curl python3 libjpeg-dev libpng-dev python3-dev python3-pip cmake gcc libx11-dev
         # os.system('git clone https://github.com/b-oern/age-and-gender.git')
@@ -196,6 +203,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
     image_key = 'image'
 
     def __init__(self):
+        super().__init__()
         import torch
         from torch.nn import CosineSimilarity
         from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, AutoProcessor
@@ -247,6 +255,9 @@ class TextBlobRunner(runner.BaseJobExecutor):
     MODULES = ['textblob', 'textblob_de']
     type = 'textblob'
     text_key = 'text'
+
+    def __init__(self):
+        super().__init__()
 
     def get_textblob(self, text, lang='en'):
         if lang == 'de':

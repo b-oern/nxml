@@ -10,6 +10,9 @@ class LibRosa(r.BaseJobExecutor):
     MODULES = ['librosa']
     type = 'librosa'
 
+    def __init__(self):
+        super().__init__()
+
     def execute_file(self, file):
         import librosa
         import librosa.feature
@@ -35,6 +38,7 @@ class CommandRecognition(r.BaseJobExecutor):
     type = 'speech_reg'
 
     def __init__(self, model="MIT/ast-finetuned-speech-commands-v2"):
+        super().__init__()
         from transformers import pipeline
         self.classifier = pipeline("audio-classification", model=model)
         self.param_names['audio'] = "{'path': 'down/1816b768_nohash_0.wav', 'array': array([ 0.00079346, -0.00543213, -0.00054932, ..., -0.00717163,-0.00415039, -0.00811768]), 'sampling_rate': 16000}"
@@ -58,6 +62,7 @@ class VoiceAssitant(r.BaseJobExecutor):
     via https://huggingface.co/learn/audio-course/chapter7/voice-assistant
     """
     def __init__(self, model="MIT/ast-finetuned-speech-commands-v2"):
+        super().__init__()
         from transformers import pipeline
         self.classifier = pipeline("audio-classification", model=model)
 
@@ -99,6 +104,7 @@ class AudioGenerator(r.BaseJobExecutor):
     https://huggingface.co/facebook/musicgen-small
     """
     def __init__(self):
+        super().__init__()
         from transformers import pipeline
         self.synthesiser = pipeline("text-to-audio", "facebook/musicgen-small")
 
@@ -127,6 +133,7 @@ class ElevenLabs(r.BaseJobExecutor):
         'Otto': 'FTNCalFNG5bRnkkaP5Ug'
     }
     def __init__(self, api_key=None, voice_id='FTNCalFNG5bRnkkaP5Ug', args:u.Args={}):
+        super().__init__()
         if api_key is None:
             api_key = args.get("elevenlabs_api_key", '')
         self.api_key = api_key
