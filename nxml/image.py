@@ -8,6 +8,7 @@ import os.path
 import time
 import glob
 from scipy.spatial.distance import cosine
+import requests
 
 from nwebclient import runner as r
 from nwebclient import NWebClient
@@ -523,13 +524,17 @@ class DocumentAnalysis(r.ImageExecutor):
 
     def __init__(self):
         super().__init__()
-        import cv2
-        from ultralytics import YOLO
-        self.cv2 = cv2
-        if not os.path.exists("yolov10x_best.pt"):
-            url = 'https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt'
-            u.download(url, "yolov10x_best.pt")
-        self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
+        self.type = 'document'
+        try:
+            import cv2
+            from ultralytics import YOLO
+            self.cv2 = cv2
+            if not os.path.exists("yolov10x_best.pt"):
+                url = 'https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt'
+                u.download(url, "yolov10x_best.pt")
+            self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
+        except Exception as e:
+            self.error(str(e))
 
     def pillow_image_to_base64_string(self, img):
         import base64
@@ -546,7 +551,18 @@ class DocumentAnalysis(r.ImageExecutor):
         r = self.execute({'image': f})
         p(f'<img src="data:image/png;base64,{r["image"]}" />')
         p.pre(json.dumps(r))
+        p.hr()
         return p.nxui()
+
+    def write_to_meta(self, d: NWebDoc, result:dict):
+        i = 0
+        for item in result.get('items', []):
+            d.setMetaValue('DocumentAnalysis', i, json.dumps(item))
+            i += 0
+
+    def execute(self, data):
+        #if 'nweb_doc_map' in data
+        return super().execute(data)
 
     def executeImage(self, image, data):
         #image = cv2.imread(image_path)
@@ -633,4 +649,4 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
         self.p = r.ProcessExecutor(cmd, on_line=print)
 
     def execute(self, data):
-        return {}
+        return requests.post('http://127.0.0.1:27201/', data).json()

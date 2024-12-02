@@ -60,7 +60,16 @@ class OLLama(r.BaseJobExecutor):
         response = self.ollama.generate(model='llama3', prompt=data['prompt'])
         return response
 
+    def cprompt(self, data:dict):
+        from nwebclient import crypt
+        args = u.Args()
+        pw = args.get('NPY_KEY', 'xxx')
+        result = self.remote_prompt(crypt.decrypt_message(data['cprompt'], pw))
+        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
+
     def execute(self, data):
         if 'prompt' in data:
             return self.remote_prompt(data)
+        if 'cpromt' in data:
+            return self.cprompt(data)
         return super().execute(data)
