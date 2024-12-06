@@ -1,5 +1,6 @@
 import requests
 import json
+import docker
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
@@ -45,3 +46,64 @@ class LLM(r.BaseJobExecutor):
         p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
         p.div('', id='result')
         return p.nxui()
+
+
+class OLLama(r.BaseJobExecutor):
+
+    MODULES = ['ollama']
+
+    def __init__(self, type='ollm', args: u.Args = None):
+        super().__init__()
+        self.type = type
+        import ollama as o
+        self.ollama = o
+
+    def remote_prompt(self, data):
+        response = self.ollama.generate(model='llama3', prompt=data['prompt'])
+        return response
+
+    def cprompt(self, data:dict):
+        from nwebclient import crypt
+        args = u.Args()
+        pw = args.get('NPY_KEY', 'xxx')
+        result = self.remote_prompt(crypt.decrypt_message(data['cprompt'], pw))
+        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
+
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.remote_prompt(data)
+        if 'cprompt' in data:
+            return self.cprompt(data)
+        return super().execute(data)
+
+
+class OLLamaDockerd(r.BaseJobExecutor):
+
+    def __init__(self, type='ollm'):
+        super().__init__()
+        self.type = type
+        self.docker = docker.from_env()
+        self.inner = OLLama()
+        if self.exists():
+            self.start()
+        else:
+            # docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+            self.container = self.docker.run("ollama/ollama", detach=True, name='ollama', port=11434)
+            self.delayed(30, self.docker_load)
+
+    def docker_load(self):
+        self.container.exec_run('ollama run llama3.2', detach=True)
+
+    def start(self):
+        for c in self.docker.containers.list():
+            if c.name == 'ollama':
+                c.start()
+
+    def exists(self):
+        for c in self.docker.containers.list():
+            if c.name == 'ollama':
+                return True
+        return False
+
+    def execute(self, data):
+        return self.inner.execute(data)

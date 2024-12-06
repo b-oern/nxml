@@ -4,7 +4,8 @@
 #
 FROM nxware/nxdev
 COPY document_analysis.sh /document_analysis.sh
+COPY document_analysis_start.sh /document_analysis_start.sh
 RUN sh /document_analysis.sh
 
 EXPOSE 7070
-CMD ["python", "-m", "nwebclient.runner", "--rest", "--executor", "nxml.image:DocumentAnalysis"]
+CMD ["sh", "/document_analysis_start.sh"]

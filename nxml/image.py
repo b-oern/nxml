@@ -8,6 +8,7 @@ import os.path
 import time
 import glob
 from scipy.spatial.distance import cosine
+import requests
 
 from nwebclient import runner as r
 from nwebclient import NWebClient
@@ -27,6 +28,7 @@ class DatasetWriter:
     output_folder = './'
 
     def __init__(self, output_folder = './'):
+        super().__init__()
         self.output_folder = output_folder
 
     def create_metadata(self, img:NWebDoc, fname:str):
@@ -75,6 +77,7 @@ class ImageEmbeddingCreator(r.ImageExecutor):
     knn_ids = {}
 
     def __init__(self, embedding_folder='./', args:u.Args={}):
+        super().__init__()
         self.var_names.append("embedding_folder")
         self.var_names.append("threshold")
         if self.embedding_folder == embedding_folder and args.get('embedding_folder', None) is not None:
@@ -251,6 +254,9 @@ class ImageSimilarity(r.ImageExecutor):
 
     threshold = 0.9
 
+    def __init__(self):
+        super().__init__()
+
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
         from skimage import metrics
@@ -405,6 +411,7 @@ class ObjectDetector(r.ImageExecutor):
     type = 'od'
 
     def __init__(self):
+        super().__init__()
         import torch
         from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
@@ -457,6 +464,7 @@ class ImageClassifier(r.ImageExecutor):
     classes = []
 
     def __init__(self, classes=[]):
+        super().__init__()
         from clip_interrogator import Config, Interrogator, LabelTable
         self.ci = Interrogator(Config())
         self.LT = LabelTable
@@ -515,13 +523,18 @@ class DocumentAnalysis(r.ImageExecutor):
     BOX_PADDING = 2
 
     def __init__(self):
-        import cv2
-        from ultralytics import YOLO
-        self.cv2 = cv2
-        if not os.path.exists("yolov10x_best.pt"):
-            url = 'https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt'
-            u.download(url, "yolov10x_best.pt")
-        self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
+        super().__init__()
+        self.type = 'document'
+        try:
+            import cv2
+            from ultralytics import YOLO
+            self.cv2 = cv2
+            if not os.path.exists("yolov10x_best.pt"):
+                url = 'https://huggingface.co/spaces/omoured/YOLOv10-Document-Layout-Analysis/resolve/main/models/yolov10x_best.pt'
+                u.download(url, "yolov10x_best.pt")
+            self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
+        except Exception as e:
+            self.error(str(e))
 
     def pillow_image_to_base64_string(self, img):
         import base64
@@ -538,7 +551,18 @@ class DocumentAnalysis(r.ImageExecutor):
         r = self.execute({'image': f})
         p(f'<img src="data:image/png;base64,{r["image"]}" />')
         p.pre(json.dumps(r))
+        p.hr()
         return p.nxui()
+
+    def write_to_meta(self, d: NWebDoc, result:dict):
+        i = 0
+        for item in result.get('items', []):
+            d.setMetaValue('DocumentAnalysis', i, json.dumps(item))
+            i += 0
+
+    def execute(self, data):
+        #if 'nweb_doc_map' in data
+        return super().execute(data)
 
     def executeImage(self, image, data):
         #image = cv2.imread(image_path)
@@ -604,6 +628,7 @@ class DocumentAnalysis(r.ImageExecutor):
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
     def __init__(self, build=True):
+        super().__init__()
         if build:
             self.docker_build()
 
@@ -624,4 +649,4 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
         self.p = r.ProcessExecutor(cmd, on_line=print)
 
     def execute(self, data):
-        return {}
+        return requests.post('http://127.0.0.1:27201/', data).json()

@@ -43,8 +43,9 @@ if __name__ == '__main__':
                 'document = nxml.image:DocumentAnalysis',
                 'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'rllm = nxml.llm:LLM',
+                'ollm = nxml.llm:OLLama',
+                'ollmd = nxml.llm:OLLamaDockerd',
                 'whisper = nxml.analyse:Whisper',
-                'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'tts = nxml.audio:ElevenLabs'
             ]
         },
@@ -53,5 +54,9 @@ if __name__ == '__main__':
             "License :: OSI Approved :: MIT License",
             "Operating System :: OS Independent",
         ],
-        install_requires=["usersettings>=1.0.7"]
+        install_requires=[
+            "usersettings>=1.0.7",
+            "docker",
+            "ollama"
+        ]
     )
