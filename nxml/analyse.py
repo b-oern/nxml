@@ -1,6 +1,6 @@
 import json
 
-from nwebclient import runner
+from nwebclient import runner, base
 from nwebclient import util
 from nwebclient import base as b
 import os
@@ -91,6 +91,7 @@ class FlairRunner(runner.BaseJobExecutor):
 
     def __init__(self, model="flair/ner-english-ontonotes-large"):
         super().__init__()
+        self.type='flair'
         try:
             from flair.models import SequenceTagger
             self.tagger = SequenceTagger.load(model)
@@ -122,6 +123,13 @@ class FlairRunner(runner.BaseJobExecutor):
         except AttributeError as e:
             data['error'] = 'Flair Error ' + str(e)
         return data
+
+    def part_index(self, p:base.Page, params={}):
+        p.h1("Flair SequenceTagger")
+        p.form_input('text', "Text", id='text')
+        p(self.action_btn_parametric("Tag", type=self.type, text='#text'))
+        p.pre('', id='result')
+
 
 
 class BertEmbeddings(runner.BaseJobExecutor):
