@@ -107,3 +107,30 @@ class OLLamaDockerd(r.BaseJobExecutor):
 
     def execute(self, data):
         return self.inner.execute(data)
+
+
+class CohereLlm(r.BaseJobExecutor):
+
+    MODULES = ['cohere']
+
+    def __init__(self, api_key=None, args:u.Args={}):
+        super().__init__()
+        self.type = 'cohere'
+        import cohere
+        self.cohere = cohere
+        self.co = cohere.Client(
+            api_key=args.get('COHERE_API_KEY', api_key),
+        )
+
+    def prompt(self, prompt):
+        return str(self.co.chat(
+            message=prompt,
+            model="command"
+        ))
+
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.prompt(data)
+        #if 'cprompt' in data:
+        #    return self.cprompt(data)
+        return super().execute(data)
