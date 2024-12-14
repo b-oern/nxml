@@ -29,7 +29,7 @@ class BaseLLM(r.BaseJobExecutor):
 
     def execute(self, data):
         if 'prompt' in data:
-            return self.prompt(data)
+            return self.prompt(data['prompt'], data)
         if 'cprompt' in data:
             return self.cprompt(data)
         return super().execute(data)
@@ -113,7 +113,7 @@ class OLLama(BaseLLM):
         import ollama as o
         self.ollama = o
 
-    def prompt(self, data):
+    def prompt(self, prompt, data):
         response = self.ollama.generate(model='llama3', prompt=prompt)
         return response
 
