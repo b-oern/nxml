@@ -53,6 +53,7 @@ class OpenAiLLM(BaseLLM):
         self.define_vars('model', 'last_request')
         if args is None:
             args = u.Args()
+        self.key = args.get('OPENAI_KEY')
 
     def prompt(self, prompt, data):
         self.last_request = time.time()
