@@ -1,6 +1,7 @@
 import requests
 import json
 import docker
+import time
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
@@ -11,7 +12,7 @@ from nwebclient import crypt
 from nwebclient.nlp import ParagraphParser
 
 
-class LLM(r.BaseJobExecutor):
+class RLLM(r.BaseJobExecutor):
 
     def __init__(self, type='rllm', args: u.Args = None):
         super().__init__()
@@ -116,6 +117,7 @@ class CohereLlm(r.BaseJobExecutor):
     def __init__(self, api_key=None, args:u.Args={}):
         super().__init__()
         self.type = 'cohere'
+        self.last_request = 0
         import cohere
         self.cohere = cohere
         self.co = cohere.Client(
@@ -123,6 +125,9 @@ class CohereLlm(r.BaseJobExecutor):
         )
 
     def prompt(self, prompt):
+        if time.time() - self.last_request < 2:
+            time.sleep(2)
+        self.last_request = time.time()
         return str(self.co.chat(
             message=prompt,
             model="command"
