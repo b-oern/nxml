@@ -115,8 +115,6 @@ class CohereLlm(r.BaseJobExecutor):
 
     MODULES = ['cohere']
 
-
-
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__()
         self.type = 'cohere'
@@ -133,8 +131,8 @@ class CohereLlm(r.BaseJobExecutor):
         if time.time() - self.last_request < 2:
             time.sleep(2)
         self.last_request = time.time()
-        resp = str(self.co.chat(message=prompt, model=self.model))
-        return self.success('ok', response=resp)
+        resp = self.co.chat(message=prompt, model=self.model)
+        return self.success('ok', response=resp.text)
 
     def execute(self, data):
         if 'prompt' in data:
