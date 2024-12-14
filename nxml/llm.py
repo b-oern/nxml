@@ -57,8 +57,8 @@ class OpenAiLLM(BaseLLM):
 
     def prompt(self, prompt, data):
         self.last_request = time.time()
-        import openai
-        openai.api_key = self.key
+        from openai import OpenAI
+        client = OpenAI(api_key=self.key)
 
         # messages = []
         # system_content = '''You are a marketing assistant called MarkBot.
@@ -68,14 +68,14 @@ class OpenAiLLM(BaseLLM):
         # prompt_text = 'Hi, How can i improve my sellings of cakes?'
         # messages.append({"role": "user", "content": prompt_text})
         # wirft openai.error.RateLimitError: You exceeded your current quota, please check your plan and billing details.
-        completion = openai.ChatCompletion.create(
+        completion = client.chat.completions.create(
             model=self.model,  # alt gpt-4o-mini
             messages=[
                 {"role": "user", "content": prompt}
             ],
             temperature=0
         )
-        resp = completion.choices[0].message.content
+        resp = str(completion)
         return self.success('ok', response=resp)
 
 
