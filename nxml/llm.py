@@ -1,6 +1,5 @@
 import requests
 import json
-import json.decoder
 import docker
 import time
 
@@ -18,25 +17,25 @@ class RLLM(r.BaseJobExecutor):
         super().__init__()
         if args is None:
             args = u.Args()
+        self.count = 0
         self.type = type
         self.args = args
 
     def remote_prompt(self, data):
+        self.count += 1
+        prompt = data['prompt']
+        url = self.args.get('LLM_URL')
+        pw = self.args.get('NPY_KEY', '')
+        cprompt = crypt.encrypt_message(prompt, pw)
+        resp = requests.post(url, {
+            'cprompt': cprompt
+        })
         try:
-            prompt = data['prompt']
-            url = self.args.get('LLM_URL')
-            pw = self.args.get('NPY_KEY', '')
-            cprompt = crypt.encrypt_message(prompt, pw)
-            resp = requests.post(url, {
-                'cprompt': cprompt
-            })
             result = json.loads(resp.text)
             text = crypt.decrypt_message(result['response'], pw)
-            return self.success('ok', response=text)
-        #except json.decoder.JSONDecodeError:
-        #    return self.fail(str(e), response_text=resp.text)
+            return self.success('ok', response=text, count=self.count)
         except Exception as e:
-            return self.fail(str(e), response_text=resp.text)
+            return self.fail(str(e), response_text=resp.text, status_code=resp.status_code)
 
     def execute(self, data):
         if 'prompt' in data:
@@ -116,15 +115,15 @@ class CohereLlm(r.BaseJobExecutor):
 
     MODULES = ['cohere']
 
-    def __init__(self, api_key=None, args:u.Args={}):
+    def __init__(self, api_key=None, args:u.Args=None):
         super().__init__()
         self.type = 'cohere'
         self.last_request = 0
+        if args is None:
+            args = u.Args()
         import cohere
         self.cohere = cohere
-        self.co = cohere.Client(
-            api_key=args.get('COHERE_API_KEY', api_key),
-        )
+        self.co = cohere.Client(api_key=args.get('COHERE_API_KEY', api_key))
 
     def prompt(self, prompt):
         if time.time() - self.last_request < 2:
