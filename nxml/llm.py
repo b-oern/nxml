@@ -115,10 +115,14 @@ class CohereLlm(r.BaseJobExecutor):
 
     MODULES = ['cohere']
 
+
+
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__()
         self.type = 'cohere'
+        self.model = 'command'
         self.last_request = 0
+        self.define_vars('model', 'last_request')
         if args is None:
             args = u.Args()
         import cohere
@@ -129,10 +133,8 @@ class CohereLlm(r.BaseJobExecutor):
         if time.time() - self.last_request < 2:
             time.sleep(2)
         self.last_request = time.time()
-        return str(self.co.chat(
-            message=prompt,
-            model="command"
-        ))
+        resp = str(self.co.chat(message=prompt, model=self.model))
+        return self.success('ok', response=resp)
 
     def execute(self, data):
         if 'prompt' in data:
@@ -140,3 +142,10 @@ class CohereLlm(r.BaseJobExecutor):
         #if 'cprompt' in data:
         #    return self.cprompt(data)
         return super().execute(data)
+
+    def page_index(self, params={}):
+        p = b.Page(owner=self)
+        p.input('prompt', id='prompt')
+        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
+        p.div('', id='result')
+        return p.nxui()
