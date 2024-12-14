@@ -129,7 +129,7 @@ class CohereLlm(r.BaseJobExecutor):
         self.cohere = cohere
         self.co = cohere.Client(api_key=args.get('COHERE_API_KEY', api_key))
 
-    def prompt(self, prompt):
+    def prompt(self, prompt, data={}):
         if time.time() - self.last_request < 2:
             time.sleep(2)
         self.last_request = time.time()
@@ -138,7 +138,7 @@ class CohereLlm(r.BaseJobExecutor):
 
     def execute(self, data):
         if 'prompt' in data:
-            return self.prompt(data)
+            return self.prompt(data['prompt'], data)
         #if 'cprompt' in data:
         #    return self.cprompt(data)
         return super().execute(data)
