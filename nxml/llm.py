@@ -11,17 +11,83 @@ from nwebclient import util as u
 from nwebclient import crypt
 
 
-class RLLM(r.BaseJobExecutor):
+class BaseLLM(r.BaseJobExecutor):
+
+    def __init__(self, type='llm'):
+        super().__init__()
+        self.type = type
+
+    def prompt(self, prompt, data={}):
+        pass
+
+    def cprompt(self, data: dict):
+        from nwebclient import crypt
+        args = u.Args()
+        pw = args.get('NPY_KEY', 'xxx')
+        result = self.prompt(crypt.decrypt_message(data['cprompt'], pw))
+        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
+
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.prompt(data)
+        if 'cprompt' in data:
+            return self.cprompt(data)
+        return super().execute(data)
+
+    def page_index(self, params={}):
+        p = b.Page(owner=self)
+        p.input('prompt', id='prompt')
+        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
+        p.div('', id='result')
+        return p.nxui()
+
+
+class OpenAiLLM(BaseLLM):
+
+    MODELS = ['gpt-4o', 'gpt-4o-mini']
+
+    def __init__(self, api_key=None, args: u.Args = None):
+        super().__init__('gptllm')
+        self.model = "gpt-4o"
+        self.last_request = 0
+        self.define_vars('model', 'last_request')
+        if args is None:
+            args = u.Args()
+
+    def prompt(self, prompt, data):
+        self.last_request = time.time()
+        import openai
+        openai.api_key = self.key
+
+        # messages = []
+        # system_content = '''You are a marketing assistant called MarkBot.
+        # You only respond to greetings and marketing-related questions.
+        # For any other question you must answer "I'm not suitable for this type of tasks.".'''
+        # messages.append({"role": "system", "content": system_content})
+        # prompt_text = 'Hi, How can i improve my sellings of cakes?'
+        # messages.append({"role": "user", "content": prompt_text})
+        # wirft openai.error.RateLimitError: You exceeded your current quota, please check your plan and billing details.
+        completion = openai.ChatCompletion.create(
+            model=self.llm,  # alt gpt-4o-mini
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+        resp = completion.choices[0].message.content
+        return self.success('ok', response=resp)
+
+
+class RLLM(BaseLLM):
 
     def __init__(self, type='rllm', args: u.Args = None):
-        super().__init__()
+        super().__init__(type)
         if args is None:
             args = u.Args()
         self.count = 0
-        self.type = type
         self.args = args
 
-    def remote_prompt(self, data):
+    def prompt(self, prompt, data):
         self.count += 1
         prompt = data['prompt']
         url = self.args.get('LLM_URL')
@@ -37,53 +103,25 @@ class RLLM(r.BaseJobExecutor):
         except Exception as e:
             return self.fail(str(e), response_text=resp.text, status_code=resp.status_code)
 
-    def execute(self, data):
-        if 'prompt' in data:
-            return self.remote_prompt(data)
-        return super().execute(data)
 
-    def page_index(self, params={}):
-        p = b.Page(owner=self)
-        p.input('prompt', id='prompt')
-        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
-        p.div('', id='result')
-        return p.nxui()
-
-
-class OLLama(r.BaseJobExecutor):
+class OLLama(BaseLLM):
 
     MODULES = ['ollama']
 
     def __init__(self, type='ollm', args: u.Args = None):
-        super().__init__()
-        self.type = type
+        super().__init__(type)
         import ollama as o
         self.ollama = o
 
-    def remote_prompt(self, data):
-        response = self.ollama.generate(model='llama3', prompt=data['prompt'])
+    def prompt(self, data):
+        response = self.ollama.generate(model='llama3', prompt=prompt)
         return response
 
-    def cprompt(self, data:dict):
-        from nwebclient import crypt
-        args = u.Args()
-        pw = args.get('NPY_KEY', 'xxx')
-        result = self.remote_prompt(crypt.decrypt_message(data['cprompt'], pw))
-        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
 
-    def execute(self, data):
-        if 'prompt' in data:
-            return self.remote_prompt(data)
-        if 'cprompt' in data:
-            return self.cprompt(data)
-        return super().execute(data)
-
-
-class OLLamaDockerd(r.BaseJobExecutor):
+class OLLamaDockerd(BaseLLM):
 
     def __init__(self, type='ollm'):
-        super().__init__()
-        self.type = type
+        super().__init__(type)
         self.docker = docker.from_env()
         self.inner = OLLama()
         if self.exists():
@@ -111,13 +149,12 @@ class OLLamaDockerd(r.BaseJobExecutor):
         return self.inner.execute(data)
 
 
-class CohereLlm(r.BaseJobExecutor):
+class CohereLlm(BaseLLM):
 
     MODULES = ['cohere']
 
     def __init__(self, api_key=None, args:u.Args=None):
-        super().__init__()
-        self.type = 'cohere'
+        super().__init__('cohere')
         self.model = 'command'
         self.last_request = 0
         self.define_vars('model', 'last_request')
@@ -133,17 +170,3 @@ class CohereLlm(r.BaseJobExecutor):
         self.last_request = time.time()
         resp = self.co.chat(message=prompt, model=self.model)
         return self.success('ok', response=resp.text)
-
-    def execute(self, data):
-        if 'prompt' in data:
-            return self.prompt(data['prompt'], data)
-        #if 'cprompt' in data:
-        #    return self.cprompt(data)
-        return super().execute(data)
-
-    def page_index(self, params={}):
-        p = b.Page(owner=self)
-        p.input('prompt', id='prompt')
-        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
-        p.div('', id='result')
-        return p.nxui()

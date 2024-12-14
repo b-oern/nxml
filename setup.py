@@ -45,6 +45,7 @@ if __name__ == '__main__':
                 'rllm = nxml.llm:RLLM',
                 'ollm = nxml.llm:OLLama',
                 'ollmd = nxml.llm:OLLamaDockerd',
+                'gptllm = nxml.llm:OpenAiLLM',
                 'cohere = nxml.llm:CohereLlm',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs'
