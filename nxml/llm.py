@@ -44,11 +44,11 @@ class BaseLLM(r.BaseJobExecutor):
 
 class OpenAiLLM(BaseLLM):
 
-    MODELS = ['gpt-4o', 'gpt-4o-mini']
+    MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4']
 
     def __init__(self, api_key=None, args: u.Args = None):
         super().__init__('gptllm')
-        self.model = "gpt-4o"
+        self.model = "gpt-4"
         self.last_request = 0
         self.define_vars('model', 'last_request')
         if args is None:
@@ -75,6 +75,7 @@ class OpenAiLLM(BaseLLM):
             ],
             temperature=0
         )
+        # completion.choices[0].message.content
         resp = str(completion)
         return self.success('ok', response=resp)
 
