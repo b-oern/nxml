@@ -1,5 +1,6 @@
 import requests
 import json
+import json.decoder
 import docker
 import time
 
@@ -9,7 +10,6 @@ from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient import crypt
-from nwebclient.nlp import ParagraphParser
 
 
 class RLLM(r.BaseJobExecutor):
@@ -22,17 +22,19 @@ class RLLM(r.BaseJobExecutor):
         self.args = args
 
     def remote_prompt(self, data):
-        prompt = data['prompt']
-        url = self.args.get('LLM_URL')
-        pw = self.args.get('NPY_KEY', '')
-        cprompt = crypt.encrypt_message(prompt, pw)
-        resp = requests.post(url, {
-            'cprompt': cprompt
-        })
-        result = json.loads(resp.text)
         try:
+            prompt = data['prompt']
+            url = self.args.get('LLM_URL')
+            pw = self.args.get('NPY_KEY', '')
+            cprompt = crypt.encrypt_message(prompt, pw)
+            resp = requests.post(url, {
+                'cprompt': cprompt
+            })
+            result = json.loads(resp.text)
             text = crypt.decrypt_message(result['response'], pw)
             return self.success('ok', response=text)
+        #except json.decoder.JSONDecodeError:
+        #    return self.fail(str(e), response_text=resp.text)
         except Exception as e:
             return self.fail(str(e), response_text=resp.text)
 
