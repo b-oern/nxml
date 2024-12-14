@@ -69,7 +69,7 @@ class OpenAiLLM(BaseLLM):
         # messages.append({"role": "user", "content": prompt_text})
         # wirft openai.error.RateLimitError: You exceeded your current quota, please check your plan and billing details.
         completion = openai.ChatCompletion.create(
-            model=self.llm,  # alt gpt-4o-mini
+            model=self.model,  # alt gpt-4o-mini
             messages=[
                 {"role": "user", "content": prompt}
             ],
