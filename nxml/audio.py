@@ -172,6 +172,34 @@ class ElevenLabs(r.BaseJobExecutor):
             'response': response.status_code
         }
 
+    def user_subscription(self):
+        url = 'https://api.elevenlabs.io/v1/user/subscription'
+        # {
+        #   "tier": "<string>",
+        #   "character_count": 123,
+        #   "character_limit": 123,
+        #   "can_extend_character_limit": true,
+        #   "allowed_to_extend_character_limit": true,
+        #   "next_character_count_reset_unix": 123,
+        #   "voice_limit": 123,
+        #   "max_voice_add_edits": 123,
+        #   "voice_add_edit_counter": 123,
+        #   "professional_voice_limit": 123,
+        #   "can_extend_voice_limit": true,
+        #   "can_use_instant_voice_cloning": true,
+        #   "can_use_professional_voice_cloning": true,
+        #   "currency": "usd",
+        #   "status": "trialing",
+        #   "billing_period": "monthly_period",
+        #   "character_refresh_period": "monthly_period",
+        #   "next_invoice": {
+        #     "amount_due_cents": 123,
+        #     "next_payment_attempt_unix": 123
+        #   },
+        #   "has_open_invoices": true
+        # }
+        return {}
+
     def execute(self, data):
         if 'tts' in data:
             return self.request(data['tts'])

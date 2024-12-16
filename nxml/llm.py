@@ -1,6 +1,7 @@
 import requests
 import json
 import docker
+import time
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
@@ -8,36 +9,29 @@ from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient import crypt
-from nwebclient.nlp import ParagraphParser
 
 
-class LLM(r.BaseJobExecutor):
+class BaseLLM(r.BaseJobExecutor):
 
-    def __init__(self, type='rllm', args: u.Args = None):
+    def __init__(self, type='llm'):
         super().__init__()
-        if args is None:
-            args = u.Args()
         self.type = type
-        self.args = args
 
-    def remote_prompt(self, data):
-        prompt = data['prompt']
-        url = self.args.get('LLM_URL')
-        pw = self.args.get('NPY_KEY', '')
-        cprompt = crypt.encrypt_message(prompt, pw)
-        resp = requests.post(url, {
-            'cprompt': cprompt
-        })
-        result = json.loads(resp.text)
-        try:
-            text = crypt.decrypt_message(result['response'], pw)
-            return self.success('ok', response=text)
-        except Exception as e:
-            return self.fail(str(e), response_text=resp.text)
+    def prompt(self, prompt, data={}):
+        pass
+
+    def cprompt(self, data: dict):
+        from nwebclient import crypt
+        args = u.Args()
+        pw = args.get('NPY_KEY', 'xxx')
+        result = self.prompt(crypt.decrypt_message(data['cprompt'], pw))
+        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
 
     def execute(self, data):
         if 'prompt' in data:
-            return self.remote_prompt(data)
+            return self.prompt(data['prompt'], data)
+        if 'cprompt' in data:
+            return self.cprompt(data)
         return super().execute(data)
 
     def page_index(self, params={}):
@@ -48,40 +42,88 @@ class LLM(r.BaseJobExecutor):
         return p.nxui()
 
 
-class OLLama(r.BaseJobExecutor):
+class OpenAiLLM(BaseLLM):
+
+    MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4']
+
+    def __init__(self, api_key=None, args: u.Args = None):
+        super().__init__('gptllm')
+        self.model = "gpt-4"
+        self.last_request = 0
+        self.define_vars('model', 'last_request')
+        if args is None:
+            args = u.Args()
+        self.key = args.get('OPENAI_KEY')
+
+    def prompt(self, prompt, data):
+        self.last_request = time.time()
+        from openai import OpenAI
+        client = OpenAI(api_key=self.key)
+
+        # messages = []
+        # system_content = '''You are a marketing assistant called MarkBot.
+        # You only respond to greetings and marketing-related questions.
+        # For any other question you must answer "I'm not suitable for this type of tasks.".'''
+        # messages.append({"role": "system", "content": system_content})
+        # prompt_text = 'Hi, How can i improve my sellings of cakes?'
+        # messages.append({"role": "user", "content": prompt_text})
+        # wirft openai.error.RateLimitError: You exceeded your current quota, please check your plan and billing details.
+        completion = client.chat.completions.create(
+            model=self.model,  # alt gpt-4o-mini
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+        # completion.choices[0].message.content
+        resp = str(completion)
+        return self.success('ok', response=resp)
+
+
+class RLLM(BaseLLM):
+
+    def __init__(self, type='rllm', args: u.Args = None):
+        super().__init__(type)
+        if args is None:
+            args = u.Args()
+        self.count = 0
+        self.args = args
+
+    def prompt(self, prompt, data):
+        self.count += 1
+        prompt = data['prompt']
+        url = self.args.get('LLM_URL')
+        pw = self.args.get('NPY_KEY', '')
+        cprompt = crypt.encrypt_message(prompt, pw)
+        resp = requests.post(url, {
+            'cprompt': cprompt
+        })
+        try:
+            result = json.loads(resp.text)
+            text = crypt.decrypt_message(result['response'], pw)
+            return self.success('ok', response=text, count=self.count)
+        except Exception as e:
+            return self.fail(str(e), response_text=resp.text, status_code=resp.status_code)
+
+
+class OLLama(BaseLLM):
 
     MODULES = ['ollama']
 
     def __init__(self, type='ollm', args: u.Args = None):
-        super().__init__()
-        self.type = type
+        super().__init__(type)
         import ollama as o
         self.ollama = o
 
-    def remote_prompt(self, data):
-        response = self.ollama.generate(model='llama3', prompt=data['prompt'])
+    def prompt(self, prompt, data):
+        response = self.ollama.generate(model='llama3', prompt=prompt)
         return response
 
-    def cprompt(self, data:dict):
-        from nwebclient import crypt
-        args = u.Args()
-        pw = args.get('NPY_KEY', 'xxx')
-        result = self.remote_prompt(crypt.decrypt_message(data['cprompt'], pw))
-        return self.success('ok', response=crypt.encrypt_message(result['response'], pw))
 
-    def execute(self, data):
-        if 'prompt' in data:
-            return self.remote_prompt(data)
-        if 'cprompt' in data:
-            return self.cprompt(data)
-        return super().execute(data)
-
-
-class OLLamaDockerd(r.BaseJobExecutor):
+class OLLamaDockerd(BaseLLM):
 
     def __init__(self, type='ollm'):
-        super().__init__()
-        self.type = type
+        super().__init__(type)
         self.docker = docker.from_env()
         self.inner = OLLama()
         if self.exists():
@@ -107,3 +149,26 @@ class OLLamaDockerd(r.BaseJobExecutor):
 
     def execute(self, data):
         return self.inner.execute(data)
+
+
+class CohereLlm(BaseLLM):
+
+    MODULES = ['cohere']
+
+    def __init__(self, api_key=None, args:u.Args=None):
+        super().__init__('cohere')
+        self.model = 'command'
+        self.last_request = 0
+        self.define_vars('model', 'last_request')
+        if args is None:
+            args = u.Args()
+        import cohere
+        self.cohere = cohere
+        self.co = cohere.Client(api_key=args.get('COHERE_API_KEY', api_key))
+
+    def prompt(self, prompt, data={}):
+        if time.time() - self.last_request < 2:
+            time.sleep(2)
+        self.last_request = time.time()
+        resp = self.co.chat(message=prompt, model=self.model)
+        return self.success('ok', response=resp.text)

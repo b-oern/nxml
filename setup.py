@@ -42,9 +42,11 @@ if __name__ == '__main__':
                 'mail_respond = nxml.nlp:MailRespond',
                 'document = nxml.image:DocumentAnalysis',
                 'document_dockered = nxml.image:DocumentAnalysisDockerd',
-                'rllm = nxml.llm:LLM',
+                'rllm = nxml.llm:RLLM',
                 'ollm = nxml.llm:OLLama',
                 'ollmd = nxml.llm:OLLamaDockerd',
+                'gptllm = nxml.llm:OpenAiLLM',
+                'cohere = nxml.llm:CohereLlm',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs'
             ]
