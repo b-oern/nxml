@@ -88,7 +88,7 @@ class OLLamaDockerd(r.BaseJobExecutor):
             self.start()
         else:
             # docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-            self.container = self.docker.run("ollama/ollama", detach=True, name='ollama', port=11434)
+            self.container = self.docker.containers.run("ollama/ollama", detach=True, name='ollama', port=11434) # remove
             self.delayed(30, self.docker_load)
 
     def docker_load(self):
