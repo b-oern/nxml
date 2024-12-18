@@ -632,7 +632,6 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
         if build:
             self.docker_build()
 
-
     def docker_build(self):
         import pkg_resources
         path = pkg_resources.resource_filename('nxml', 'docker') + '/'

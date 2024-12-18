@@ -44,6 +44,8 @@ class BaseLLM(r.BaseJobExecutor):
 
 class OpenAiLLM(BaseLLM):
 
+    MODULES = ['openai']
+
     MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4']
 
     def __init__(self, api_key=None, args: u.Args = None):
