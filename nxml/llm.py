@@ -80,8 +80,8 @@ class OpenAiLLM(BaseLLM):
             ],
             temperature=0
         )
-        # completion.choices[0].message.content
-        resp = str(completion)
+        resp = completion.choices[0].message.content
+        #resp = str(completion)
         return self.success('ok', response=resp)
 
 
