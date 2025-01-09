@@ -57,6 +57,7 @@ class DatasetWriter:
             f.write(img.title())
         self.index += 1
 
+
 class ImageEmbeddingCreator(r.ImageExecutor):
     """
         Erstellt Embeddings
@@ -402,7 +403,7 @@ class ImageSimilarity(r.ImageExecutor):
         if 'search' in data:
             return self.searchSimilar(image, data)
         else:
-            return {'success': False, 'message': 'ImageSimilarity.executeImage'}
+            return self.fail('ImageSimilarity.executeImage')
 
 
 class ObjectDetector(r.ImageExecutor):
@@ -411,7 +412,7 @@ class ObjectDetector(r.ImageExecutor):
 
     https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
     """
-    TAGS = [TAG.IMAGE]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     type = 'od'
 
     def __init__(self):
@@ -455,12 +456,11 @@ class ObjectDetector(r.ImageExecutor):
         }
 
 
-
 class ImageClassifier(r.ImageExecutor):
     """
         https://github.com/pharmapsychotic/clip-interrogator
     """
-    TAGS = [TAG.IMAGE]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
 
     MODULES = ['clip_interrogator']
 
@@ -504,7 +504,7 @@ class DocumentAnalysis(r.ImageExecutor):
 
     """
     MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
-    TAGS = [TAG.IMAGE]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     # pycocotools==2.0.7
     # PyYAML==6.0.1
     # scipy==1.13.0
@@ -560,7 +560,7 @@ class DocumentAnalysis(r.ImageExecutor):
         p.hr()
         return p.nxui()
 
-    def write_to_meta(self, d: NWebDoc, result:dict):
+    def write_to_meta(self, d: NWebDoc, result: dict):
         i = 0
         for item in result.get('items', []):
             d.setMetaValue('DocumentAnalysis', i, json.dumps(item))
@@ -628,8 +628,7 @@ class DocumentAnalysis(r.ImageExecutor):
         from PIL import Image
         pil_image = Image.fromarray(color_converted)
 
-        return {'image': self.pillow_image_to_base64_string(pil_image),
-                'items': items}
+        return {'image': self.pillow_image_to_base64_string(pil_image), 'items': items}
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):

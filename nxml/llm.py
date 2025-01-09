@@ -11,6 +11,8 @@ from nwebclient import util as u
 from nwebclient import crypt
 from nwebclient.dev import Param
 
+from nxml import nlp
+
 
 class BaseLLM(r.BaseJobExecutor):
 
@@ -179,3 +181,37 @@ class CohereLlm(BaseLLM):
         self.last_request = time.time()
         resp = self.co.chat(message=prompt, model=self.model)
         return self.success('ok', response=resp.text)
+
+
+class TransformText(nlp.TextExecutor):
+    """
+      Template für einen Prompt der auf dem llm_type ausgefuehrt wird
+    """
+
+    TAGS = [r.TAG.TEXT_TRANSFORM]
+
+    generation_strings = [
+        'Ja gerne, '
+    ]
+    
+    def __init__(self, type='tt', llm_type='llm', pre='', post=''):
+        super().__init__()
+        self.type = type
+        self.llm_type = llm_type
+        self.post = post
+        self.pre = pre
+
+    def remove_generation_string(self, response: str):
+        # TODO remove LLM "Hier ist der Text"
+        for s in self.generation_strings:
+            if response.startswith(s):
+                response = response[len(s):]
+                break
+        return response
+
+    def execute_text(self, text, data={}):
+        d = self.getParentClass(r.LazyDispatcher)
+        prompt = self.pre + text + self.post
+        resp = d(type=self.llm_type, prompt=prompt)
+        resp['response'] = self.remove_geration_string(resp['response'])
+        return resp

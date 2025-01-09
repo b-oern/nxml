@@ -207,17 +207,21 @@ class TextClassifier(r.BaseJobExecutor):
 
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
-    def __init__(self):
+    TAGS = [r.TAG.TEXT_EXTRACTOR]
+
+    def __init__(self, type='classify', classes=None):
         super().__init__()
+        self.type = type
+        self.classes = classes
         from transformers import pipeline
         self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
     def classify(self, text, classes):
         """
-         Return: {labels: [], scores:[]}
-        :param text:
-        :param classes:
-        :return:
+             Return: {labels: [], scores:[]}
+            :param text:
+            :param classes:
+            :return:
         """
         return self.classifier(text, classes, multi_label=True)
 
@@ -232,7 +236,9 @@ class TextClassifier(r.BaseJobExecutor):
         return {}
 
     def read_classes(self, data, key='classes'):
-        res = data.get('classes', [])
+        res = data.get('classes', None)
+        if res is None:
+            return self.classes
         if isinstance(res, str):
             res = res.split(',')
         return res
