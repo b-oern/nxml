@@ -11,6 +11,7 @@ from scipy.spatial.distance import cosine
 import requests
 
 from nwebclient import runner as r
+from nwebclient.runner import TAG
 from nwebclient import NWebClient
 from nwebclient import NWebDoc
 from nwebclient import util as u
@@ -61,6 +62,7 @@ class ImageEmbeddingCreator(r.ImageExecutor):
         Erstellt Embeddings
     """
     MODULES = ['numpy', 'autofaiss']
+    TAGS = [TAG.IMAGE]
 
     type = 'img_embedding'
 
@@ -244,6 +246,7 @@ class ImageSimilarity(r.ImageExecutor):
     """
 
     MODULES = ['opencv-python', 'scikit-image']
+    TAGS = [TAG.IMAGE, '2-images']
     NS = 'image_similarity'
     type = 'image_similarity'
 
@@ -408,6 +411,7 @@ class ObjectDetector(r.ImageExecutor):
 
     https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
     """
+    TAGS = [TAG.IMAGE]
     type = 'od'
 
     def __init__(self):
@@ -456,6 +460,7 @@ class ImageClassifier(r.ImageExecutor):
     """
         https://github.com/pharmapsychotic/clip-interrogator
     """
+    TAGS = [TAG.IMAGE]
 
     MODULES = ['clip_interrogator']
 
@@ -499,6 +504,7 @@ class DocumentAnalysis(r.ImageExecutor):
 
     """
     MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
+    TAGS = [TAG.IMAGE]
     # pycocotools==2.0.7
     # PyYAML==6.0.1
     # scipy==1.13.0
@@ -627,6 +633,8 @@ class DocumentAnalysis(r.ImageExecutor):
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
+    TAGS = [TAG.IMAGE]
+
     def __init__(self, build=True):
         super().__init__()
         if build:

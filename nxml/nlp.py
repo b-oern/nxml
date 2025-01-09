@@ -38,7 +38,6 @@ def text_input_form(runner, p: b.Page, text='', caption="Execute",
     """))
 
 
-
 class DynamicPrompt:
     """
     {{firstname()}}   {{oneof("sagt", "schreibt")}}
@@ -116,7 +115,7 @@ class TextExecutor(r.BaseJobExecutor):
         except Exception as e:
             p.div("Error: " + str(e))
 
-    def page(self, params):
+    def page(self, params={}):
         p = b.Page(owner=self)
         if 'a' in params:
             pass
@@ -130,7 +129,6 @@ class TextExecutor(r.BaseJobExecutor):
         self.part_nweb_docs(p, params)
         p('</div>')
         return p.nxui()
-
 
 
 class TextToText(TextExecutor):
@@ -314,6 +312,8 @@ class TextSummarization(TextExecutor):
     """
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
+    TAGS = [r.TAG.TEXT_TRANSFORM]
+
     type = "summarize"
 
     def __init__(self, model="sshleifer/distilbart-cnn-12-6"):
@@ -330,6 +330,7 @@ class TextSummarization(TextExecutor):
         :return: object
         """
         res = self.pipe(text)[0]
+        res['value'] = res['summary_text']
         return res
 
     def execute_text(self, text, data={}):

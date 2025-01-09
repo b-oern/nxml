@@ -16,6 +16,7 @@ RESSOURCES = {
 }
 
 from nwebclient import runner as r, base
+from nwebclient.runner import TAG
 from nwebclient import util as u
 from nwebclient import base as b
 
@@ -190,6 +191,8 @@ def get_face_class(img1):
 
 
 class FaceSimilarity(r.ImageExecutor):
+
+    TAGS = [TAG.IMAGE, '2-images']
 
     type = 'face_similarity'
 

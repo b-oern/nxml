@@ -9,6 +9,7 @@ from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient import crypt
+from nwebclient.dev import Param
 
 
 class BaseLLM(r.BaseJobExecutor):
@@ -16,6 +17,8 @@ class BaseLLM(r.BaseJobExecutor):
     def __init__(self, type='llm'):
         super().__init__()
         self.type = type
+        self.define_sig(Param('prompt', 'str'))
+        self.define_sig(Param('cprompt', 'str'))
 
     def prompt(self, prompt, data={}):
         pass
@@ -124,8 +127,10 @@ class OLLama(BaseLLM):
 
 class OLLamaDockerd(BaseLLM):
 
-    def __init__(self, type='ollm'):
+    def __init__(self, type='ollm', model='llama3.2'):
         super().__init__(type)
+        self.model = model
+        self.define_vars('model')
         self.docker = docker.from_env()
         self.inner = OLLama()
         if self.exists():
@@ -136,7 +141,7 @@ class OLLamaDockerd(BaseLLM):
             self.delayed(30, self.docker_load)
 
     def docker_load(self):
-        self.container.exec_run('ollama run llama3.2', detach=True)
+        self.container.exec_run('ollama run ' + self.model, detach=True)
 
     def start(self):
         for c in self.docker.containers.list():
