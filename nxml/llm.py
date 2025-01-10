@@ -19,6 +19,8 @@ class BaseLLM(r.BaseJobExecutor):
     def __init__(self, type='llm'):
         super().__init__()
         self.type = type
+        self.count = 0
+        self.define_vars('count')
         self.define_sig(Param('prompt', 'str'))
         self.define_sig(Param('cprompt', 'str'))
 
@@ -34,6 +36,7 @@ class BaseLLM(r.BaseJobExecutor):
 
     def execute(self, data):
         if 'prompt' in data:
+            self.count += 1
             return self.prompt(data['prompt'], data)
         if 'cprompt' in data:
             return self.cprompt(data)
@@ -194,9 +197,11 @@ class TransformText(nlp.TextExecutor):
         'Ja gerne, '
     ]
     
-    def __init__(self, type='tt', llm_type='llm', pre='', post=''):
+    def __init__(self, type=None, llm_type='llm', pre='', post=''):
         super().__init__()
-        self.type = type
+        if type is not None:
+            self.type = type
+        self.define_vars('llm_type', 'pre', 'post')
         self.llm_type = llm_type
         self.post = post
         self.pre = pre
