@@ -1,6 +1,6 @@
 import setuptools
 
-version = "1.0.5"
+version = "1.0.6"
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
@@ -47,8 +47,10 @@ if __name__ == '__main__':
                 'ollmd = nxml.llm:OLLamaDockerd',
                 'gptllm = nxml.llm:OpenAiLLM',
                 'cohere = nxml.llm:CohereLlm',
+                'tt = nxml.llm:TransformText',
                 'whisper = nxml.analyse:Whisper',
-                'tts = nxml.audio:ElevenLabs'
+                'tts = nxml.audio:ElevenLabs',
+                'face_similarity = nxml.vision:FaceSimilarity'
             ]
         },
         classifiers=[

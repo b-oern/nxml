@@ -9,6 +9,9 @@ from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient import crypt
+from nwebclient.dev import Param
+
+from nxml import nlp
 
 
 class BaseLLM(r.BaseJobExecutor):
@@ -16,6 +19,8 @@ class BaseLLM(r.BaseJobExecutor):
     def __init__(self, type='llm'):
         super().__init__()
         self.type = type
+        self.define_sig(Param('prompt', 'str'))
+        self.define_sig(Param('cprompt', 'str'))
 
     def prompt(self, prompt, data={}):
         pass
@@ -43,6 +48,8 @@ class BaseLLM(r.BaseJobExecutor):
 
 
 class OpenAiLLM(BaseLLM):
+
+    MODULES = ['openai']
 
     MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4']
 
@@ -122,19 +129,21 @@ class OLLama(BaseLLM):
 
 class OLLamaDockerd(BaseLLM):
 
-    def __init__(self, type='ollm'):
+    def __init__(self, type='ollm', model='llama3.2'):
         super().__init__(type)
+        self.model = model
+        self.define_vars('model')
         self.docker = docker.from_env()
         self.inner = OLLama()
         if self.exists():
             self.start()
         else:
             # docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
-            self.container = self.docker.run("ollama/ollama", detach=True, name='ollama', port=11434)
+            self.container = self.docker.containers.run("ollama/ollama", detach=True, name='ollama', port=11434) # remove
             self.delayed(30, self.docker_load)
 
     def docker_load(self):
-        self.container.exec_run('ollama run llama3.2', detach=True)
+        self.container.exec_run('ollama run ' + self.model, detach=True)
 
     def start(self):
         for c in self.docker.containers.list():
@@ -172,3 +181,37 @@ class CohereLlm(BaseLLM):
         self.last_request = time.time()
         resp = self.co.chat(message=prompt, model=self.model)
         return self.success('ok', response=resp.text)
+
+
+class TransformText(nlp.TextExecutor):
+    """
+      Template für einen Prompt der auf dem llm_type ausgefuehrt wird
+    """
+
+    TAGS = [r.TAG.TEXT_TRANSFORM]
+
+    generation_strings = [
+        'Ja gerne, '
+    ]
+    
+    def __init__(self, type='tt', llm_type='llm', pre='', post=''):
+        super().__init__()
+        self.type = type
+        self.llm_type = llm_type
+        self.post = post
+        self.pre = pre
+
+    def remove_generation_string(self, response: str):
+        # TODO remove LLM "Hier ist der Text"
+        for s in self.generation_strings:
+            if response.startswith(s):
+                response = response[len(s):]
+                break
+        return response
+
+    def execute_text(self, text, data={}):
+        d = self.getParentClass(r.LazyDispatcher)
+        prompt = self.pre + text + self.post
+        resp = d(type=self.llm_type, prompt=prompt)
+        resp['response'] = self.remove_geration_string(resp['response'])
+        return resp

@@ -38,7 +38,6 @@ def text_input_form(runner, p: b.Page, text='', caption="Execute",
     """))
 
 
-
 class DynamicPrompt:
     """
     {{firstname()}}   {{oneof("sagt", "schreibt")}}
@@ -116,7 +115,7 @@ class TextExecutor(r.BaseJobExecutor):
         except Exception as e:
             p.div("Error: " + str(e))
 
-    def page(self, params):
+    def page(self, params={}):
         p = b.Page(owner=self)
         if 'a' in params:
             pass
@@ -130,7 +129,6 @@ class TextExecutor(r.BaseJobExecutor):
         self.part_nweb_docs(p, params)
         p('</div>')
         return p.nxui()
-
 
 
 class TextToText(TextExecutor):
@@ -209,17 +207,21 @@ class TextClassifier(r.BaseJobExecutor):
 
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
-    def __init__(self):
+    TAGS = [r.TAG.TEXT_EXTRACTOR]
+
+    def __init__(self, type='classify', classes=None):
         super().__init__()
+        self.type = type
+        self.classes = classes
         from transformers import pipeline
         self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
 
     def classify(self, text, classes):
         """
-         Return: {labels: [], scores:[]}
-        :param text:
-        :param classes:
-        :return:
+             Return: {labels: [], scores:[]}
+            :param text:
+            :param classes:
+            :return:
         """
         return self.classifier(text, classes, multi_label=True)
 
@@ -234,7 +236,9 @@ class TextClassifier(r.BaseJobExecutor):
         return {}
 
     def read_classes(self, data, key='classes'):
-        res = data.get('classes', [])
+        res = data.get('classes', None)
+        if res is None:
+            return self.classes
         if isinstance(res, str):
             res = res.split(',')
         return res
@@ -314,6 +318,8 @@ class TextSummarization(TextExecutor):
     """
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
+    TAGS = [r.TAG.TEXT_TRANSFORM]
+
     type = "summarize"
 
     def __init__(self, model="sshleifer/distilbart-cnn-12-6"):
@@ -330,6 +336,7 @@ class TextSummarization(TextExecutor):
         :return: object
         """
         res = self.pipe(text)[0]
+        res['value'] = res['summary_text']
         return res
 
     def execute_text(self, text, data={}):
