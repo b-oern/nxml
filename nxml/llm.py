@@ -218,5 +218,5 @@ class TransformText(nlp.TextExecutor):
         d = self.getParentClass(r.LazyDispatcher)
         prompt = self.pre + text + self.post
         resp = d(type=self.llm_type, prompt=prompt)
-        resp['response'] = self.remove_geration_string(resp['response'])
+        resp['response'] = self.remove_generation_string(resp['response'])
         return resp
