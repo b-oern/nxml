@@ -61,6 +61,8 @@ class DatasetWriter:
 class ImageEmbeddingCreator(r.ImageExecutor):
     """
         Erstellt Embeddings
+
+
     """
     MODULES = ['numpy', 'autofaiss']
     TAGS = [TAG.IMAGE]
@@ -81,8 +83,7 @@ class ImageEmbeddingCreator(r.ImageExecutor):
 
     def __init__(self, embedding_folder='./', args:u.Args={}):
         super().__init__()
-        self.var_names.append("embedding_folder")
-        self.var_names.append("threshold")
+        self.define_vars("embedding_folder", "threshold")
         if self.embedding_folder == embedding_folder and args.get('embedding_folder', None) is not None:
             self.embedding_folder = args.get('embedding_folder', None)
         else:
