@@ -132,7 +132,7 @@ class OLLama(BaseLLM):
 
     def prompt(self, prompt, data):
         response = self.ollama.generate(model=self.model, prompt=prompt)
-        return str(response.response)
+        return self.success('ok', response=str(response.response))
 
 
 class OLLamaDockerd(BaseLLM):
