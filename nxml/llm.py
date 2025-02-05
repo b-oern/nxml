@@ -120,13 +120,16 @@ class OLLama(BaseLLM):
 
     MODULES = ['ollama']
 
-    def __init__(self, type='ollm', args: u.Args = None):
+    def __init__(self, type='ollm', model='llama3', args: u.Args = None):
         super().__init__(type)
         import ollama as o
+        if model is None:
+            model = args.get('ollama_model', 'llama3')
+        self.model = model
         self.ollama = o
 
     def prompt(self, prompt, data):
-        response = self.ollama.generate(model='llama3', prompt=prompt)
+        response = self.ollama.generate(model=self.model, prompt=prompt)
         return response
 
 
