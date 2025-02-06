@@ -219,4 +219,5 @@ class TransformText(nlp.TextExecutor):
         prompt = self.pre + text + self.post
         resp = d(type=self.llm_type, prompt=prompt)
         resp['response'] = self.remove_generation_string(resp['response'])
+        resp['value'] = resp['response']
         return resp
