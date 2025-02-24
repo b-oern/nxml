@@ -91,6 +91,9 @@ class OpenAiLLM(BaseLLM):
 
 
 class RLLM(BaseLLM):
+    """
+      nxml.llm:RLLM
+    """
 
     def __init__(self, type='rllm', args: u.Args = None):
         super().__init__(type)
@@ -130,7 +133,7 @@ class OLLama(BaseLLM):
         self.model = model
         self.ollama = o
 
-    def prompt(self, prompt, data):
+    def prompt(self, prompt, data={}):
         response = self.ollama.generate(model=self.model, prompt=prompt)
         return self.success('ok', response=str(response.response))
 
