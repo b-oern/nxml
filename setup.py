@@ -50,7 +50,8 @@ if __name__ == '__main__':
                 'tt = nxml.llm:TransformText',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs',
-                'face_similarity = nxml.vision:FaceSimilarity'
+                'face_similarity = nxml.vision:FaceSimilarity',
+                'imap = nxml.data:Imap'
             ]
         },
         classifiers=[

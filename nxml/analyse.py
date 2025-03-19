@@ -131,7 +131,6 @@ class FlairRunner(runner.BaseJobExecutor):
         p.pre('', id='result')
 
 
-
 class BertEmbeddings(runner.BaseJobExecutor):
     MODULES = ['transformers', 'langchain', 'sentence_transformers']
     model = "all-MiniLM-L6-v2"
@@ -334,6 +333,7 @@ class AnalyseMain(runner.AutoDispatcher):
             print("Key:   " + key)
             print("")
         return res
+
 
 
 if __name__ == '__main__':
