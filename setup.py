@@ -50,6 +50,7 @@ if __name__ == '__main__':
                 'tt = nxml.llm:TransformText',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs',
+                'pipertts = nxml.audio:PiperTTS',
                 'face_similarity = nxml.vision:FaceSimilarity'
             ]
         },

@@ -2,7 +2,7 @@ import base64
 import json
 import hashlib
 
-from nwebclient import runner as r
+from nwebclient import runner as r, base
 from nwebclient import util as u
 
 
@@ -23,10 +23,33 @@ class LibRosa(r.BaseJobExecutor):
             'tempo': tempo[0]
         }
 
+    def mel(self, file):
+        import numpy as np
+        import librosa
+        import librosa.feature
+        y, sr = librosa.load(file)
+        s = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128, fmax=8000)
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(nrows=2, sharex=True)
+        img = librosa.display.specshow(librosa.power_to_db(s, ref=np.max),
+                                       x_axis='time', y_axis='mel', fmax=8000, ax=ax[0])
+        fig.colorbar(img, ax=[ax[0]])
+        ax[0].set(title='Mel spectrogram')
+        ax[0].label_outer()
+        img = librosa.display.specshow(s, x_axis='time', ax=ax[1])
+        fig.colorbar(img, ax=[ax[1]])
+        ax[1].set(title='MFCC')
+        import io
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format='jpg')
+        buffer.seek(0)
+        return 'data:image/jpg;base64' + base64.b64encode(buffer.read()).decode()
+
     def execute(self, data):
         if 'file' in data:
             return self.execute_file(data['file'])
         return super().execute(data)
+
 
 class CommandRecognition(r.BaseJobExecutor):
     """
@@ -52,11 +75,13 @@ class CommandRecognition(r.BaseJobExecutor):
             return self.predict(data['audio'])
         return super().execute(data)
 
-# https://huggingface.co/learn/audio-course/chapter4/classification_models
-# https://huggingface.co/learn/audio-course/chapter7/voice-assistant
 
 class VoiceAssitant(r.BaseJobExecutor):
     """
+
+    # https://huggingface.co/learn/audio-course/chapter4/classification_models
+    # https://huggingface.co/learn/audio-course/chapter7/voice-assistant
+
     ffmpeg
 
     via https://huggingface.co/learn/audio-course/chapter7/voice-assistant
@@ -121,6 +146,47 @@ class FFmpeg(r.BaseJobExecutor):
             return {'duration': ffmpeg.probe(data['duration'])['format']['duration']}
         # print(ffmpeg.probe('in.mp4')['format']['duration'])
         return super().execute(data)
+
+
+class PiperTTS(r.BaseJobExecutor):
+    """
+    https://www.thorsten-voice.de/thorsten-voice-%f0%9f%92%9b-piper/
+    https://github.com/rhasspy/piper
+
+    /home/pi/tts/piper
+    """
+
+    models = {
+        'de': {
+            'de_DE-thorsten-high.onnx': 'https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/high/de_DE-thorsten-high.onnx?download=true',
+            'de_DE-thorsten-high.onnx.json': 'https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json?download=true.json'
+        }
+    }
+
+    def __init__(self, type='pipertts', path=None):
+        super().__init__(type)
+
+    def tts(self, text):
+        cmd = f'{self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
+        p = r.ProcessExecutor(cmd)
+        p.write(text)
+        p.waitForEnd()
+        return self.success(file=self.path+'ausgabe.wav')
+
+    def execute(self, data):
+        if 'text' in data:
+            return self.tts(data['text'])
+        elif 'output' in data:
+            from flask import send_file
+            return send_file(self.path + 'ausgabe.wav')
+        return super().execute(data)
+
+    def part_index(self, p: base.Page, params={}):
+        p.h1("Piper TTS")
+        p.audio(f'../../?type={self.type}&output=1')
+        p.form_input('text', id='text')
+        p(self.action_btn_parametric("TTS", dict(title='TTS', type=self.type, text='#text')))
+        p.pre('', id='result')
 
 
 class ElevenLabs(r.BaseJobExecutor):
