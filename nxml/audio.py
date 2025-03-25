@@ -4,6 +4,7 @@ import hashlib
 
 from nwebclient import runner as r, base
 from nwebclient import util as u
+from nwebclient import base as b
 
 
 class LibRosa(r.BaseJobExecutor):
@@ -138,8 +139,13 @@ class AudioGenerator(r.BaseJobExecutor):
         music = self.synthesiser(prompt, forward_params={"do_sample": True})
         scipy.io.wavfile.write("musicgen_out.wav", rate=music["sampling_rate"], data=music["audio"])
 
+
 class FFmpeg(r.BaseJobExecutor):
     MODULES = ['ffmpeg-python']
+    
+    def __init__(self):
+        super().__init__('ffmpeg')
+    
     def execute(self, data):
         import ffmpeg
         if 'duration' in data:
@@ -270,3 +276,7 @@ class ElevenLabs(r.BaseJobExecutor):
         if 'tts' in data:
             return self.request(data['tts'])
         return super().execute(data)
+
+    def part_index(self, p: b.Page, params={}):
+        p.h1("TTS - Elevenlabs")
+
