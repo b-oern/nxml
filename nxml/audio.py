@@ -186,7 +186,7 @@ class PiperTTS(r.BaseJobExecutor):
 
     def tts(self, text):
         cmd = f'echo "{text}" | {self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
-        p = r.ProcessExecutor(cmd, on_up=lambda proc: proc.stdin.write(text+"\n"))
+        p = r.ProcessExecutor(cmd) # on_up=lambda proc: proc.stdin.write(text+"\n")
         p.waitForEnd()
         return self.success(file=self.path+'ausgabe.wav', cmd=cmd)
 
