@@ -178,6 +178,7 @@ class PiperTTS(r.BaseJobExecutor):
     def __init__(self, type='pipertts', path=None, args: u.Args = {}):
         super().__init__(type)
         self.define_sig(d.Param('text', is_pos=False))
+        self.define_vars('path')
         if path is None:
             path = args.get('pipertts', '')
         self.path = path
@@ -187,7 +188,7 @@ class PiperTTS(r.BaseJobExecutor):
         cmd = f'{self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
         p = r.ProcessExecutor(cmd, on_up=lambda proc: proc.stdin.write(text))
         p.waitForEnd()
-        return self.success(file=self.path+'ausgabe.wav')
+        return self.success(file=self.path+'ausgabe.wav', cmd=cmd)
 
     def execute(self, data):
         if 'text' in data:
