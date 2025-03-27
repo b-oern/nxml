@@ -200,7 +200,7 @@ class PiperTTS(r.BaseJobExecutor):
     def part_index(self, p: base.Page, params={}):
         p.h1("Piper TTS")
         p.audio(f'../../?type={self.type}&output=1')
-        p.form_input('text', id='text')
+        p.form_input('text', "Text", id='text')
         p(self.action_btn_parametric("TTS", dict(title='TTS', type=self.type, text='#text')))
         p.pre('', id='result')
         p.hr()
