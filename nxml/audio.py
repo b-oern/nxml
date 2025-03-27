@@ -165,6 +165,7 @@ class PiperTTS(r.BaseJobExecutor):
     /home/pi/tts/piper
     """
     MODULES = ['piper-tts']
+    CFGS = ['pipertts']
 
     models = {
         'de': {
