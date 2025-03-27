@@ -5,6 +5,7 @@ import hashlib
 from nwebclient import runner as r, base
 from nwebclient import util as u
 from nwebclient import base as b
+from nwebclient import dev as d
 
 
 class LibRosa(r.BaseJobExecutor):
@@ -159,8 +160,11 @@ class PiperTTS(r.BaseJobExecutor):
     https://www.thorsten-voice.de/thorsten-voice-%f0%9f%92%9b-piper/
     https://github.com/rhasspy/piper
 
+    Path to piper-bin in args:pipertts
+
     /home/pi/tts/piper
     """
+    MODULES = ['piper-tts']
 
     models = {
         'de': {
@@ -169,8 +173,13 @@ class PiperTTS(r.BaseJobExecutor):
         }
     }
 
-    def __init__(self, type='pipertts', path=None):
+    def __init__(self, type='pipertts', path=None, args: u.Args = {}):
         super().__init__(type)
+        self.define_sig(d.Param('text', is_pos=False))
+        if path is None:
+            path = args.get('pipertts', '')
+        self.path = path
+        self.delayed(13, lambda: u.download_resources(self.path, self.models['de']))
 
     def tts(self, text):
         cmd = f'{self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
@@ -193,6 +202,8 @@ class PiperTTS(r.BaseJobExecutor):
         p.form_input('text', id='text')
         p(self.action_btn_parametric("TTS", dict(title='TTS', type=self.type, text='#text')))
         p.pre('', id='result')
+        p.hr()
+        p.prop("Path", self.path)
 
 
 class ElevenLabs(r.BaseJobExecutor):
