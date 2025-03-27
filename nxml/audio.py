@@ -1,6 +1,7 @@
 import base64
 import json
 import hashlib
+import time
 
 from nwebclient import runner as r, base
 from nwebclient import util as u
@@ -185,6 +186,7 @@ class PiperTTS(r.BaseJobExecutor):
     def tts(self, text):
         cmd = f'{self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
         p = r.ProcessExecutor(cmd)
+        time.sleep(0.5)
         p.write(text)
         p.waitForEnd()
         return self.success(file=self.path+'ausgabe.wav')
