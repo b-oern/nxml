@@ -17,7 +17,7 @@ def log(message):
 
 #@mcp.tool(description="A simple echo tool")
 @mcp.tool()
-def switch(state: bool) -> bool:
+def switch(state: bool = True) -> bool:
     """ Turn the switch on or off,
       return bool for sucess of the operation"""
     log("ToolCall switch("+str(state)+")")
