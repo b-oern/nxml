@@ -335,6 +335,5 @@ class AnalyseMain(runner.AutoDispatcher):
         return res
 
 
-
 if __name__ == '__main__':
     runner.main(NlpPipeline())
