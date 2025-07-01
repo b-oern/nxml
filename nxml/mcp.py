@@ -23,6 +23,13 @@ def switch(state: bool = True) -> bool:
     log("ToolCall switch("+str(state)+")")
     return True
 
+@mcp.tool()
+def display(message: str = 'Hello') -> bool:
+    """ Display a message on the LCD,
+      return bool for sucess of the operation"""
+    log("ToolCall display("+str(message)+")")
+    return True
+
 
 # Add a dynamic greeting resource
 #@mcp.resource("greeting://{name}")

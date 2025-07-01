@@ -194,6 +194,24 @@ class CohereLlm(BaseLLM):
         return self.success('ok', response=resp.text)
 
 
+class Gemini(BaseLLM):
+
+    MODULES = ['google-genai']
+
+    def __init__(self, api_key=None, args:u.Args=None):
+        super().__init__('cohere')
+        from google import genai
+        genai.configure(api_key=api_key)
+        self.client = genai.Client()
+
+    def prompt(self, prompt, data={}):
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return self.success('ok', response=response.text)
+
+
 class TransformText(nlp.TextExecutor):
     """
       Template für einen Prompt der auf dem llm_type ausgefuehrt wird
