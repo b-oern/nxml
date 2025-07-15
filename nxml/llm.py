@@ -201,9 +201,11 @@ class Gemini(BaseLLM):
     MODULES = ['google-genai']
 
     def __init__(self, api_key=None, args:u.Args=None):
-        super().__init__('cohere')
+        super().__init__('gemini')
         from google import genai
-        os.environ["GEMINI_API_KEY"] = api_key
+        if api_key is None:
+            api_key = args['gemini']
+        os.environ["GEMINI_API_KEY"] = str(api_key)
         #genai.configure(api_key=api_key)
         self.client = genai.Client(api_key=api_key)
 
