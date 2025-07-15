@@ -194,6 +194,24 @@ class CohereLlm(BaseLLM):
         return self.success('ok', response=resp.text)
 
 
+class Gemini(BaseLLM):
+
+    MODULES = ['google-genai']
+
+    def __init__(self, api_key=None, args:u.Args=None):
+        super().__init__('cohere')
+        from google import genai
+        genai.configure(api_key=api_key)
+        self.client = genai.Client()
+
+    def prompt(self, prompt, data={}):
+        response = self.client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return self.success('ok', response=response.text)
+
+
 class TransformText(nlp.TextExecutor):
     """
       Template für einen Prompt der auf dem llm_type ausgefuehrt wird
@@ -229,3 +247,32 @@ class TransformText(nlp.TextExecutor):
         resp['response'] = self.remove_generation_string(resp['response'])
         resp['value'] = resp['response']
         return resp
+
+
+class Tool:
+    @staticmethod
+    def add_two_numbers(a: int, b: int) -> int:
+        """
+        Add two numbers
+
+        Args:
+          a: The first integer number
+          b: The second integer number
+
+        Returns:
+          int: The sum of the two numbers
+        """
+        print("Tool Call")
+        return a + b
+
+    def run(self):
+        # via https://ollama.com/blog/functions-as-tools
+        import ollama
+        response = ollama.chat(
+            'qwen3:14b',
+            messages=[{'role': 'user', 'content': 'What is Paris?'}],
+            tools=[self.add_two_numbers],  # Actual function reference
+        )
+        print(response)
+        # response enthält tool_calls=None oder array
+        # ToolCall(function=Function(name='add_two_numbers', arguments={'a': 10, 'b': 10}))]

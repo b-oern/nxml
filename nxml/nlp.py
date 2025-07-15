@@ -205,16 +205,18 @@ class TextClassifier(r.BaseJobExecutor):
     """
     https://huggingface.co/facebook/bart-large-mnli - 1.7GB
 
+    Sahajtomar/German_Zeroshot
+
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
     TAGS = [r.TAG.TEXT_EXTRACTOR]
 
-    def __init__(self, type='classify', classes=None):
+    def __init__(self, type='classify', classes=None, model="facebook/bart-large-mnli"):
         super().__init__()
         self.type = type
         self.classes = classes
         from transformers import pipeline
-        self.classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        self.classifier = pipeline("zero-shot-classification", model=model)
 
     def classify(self, text, classes):
         """
