@@ -204,6 +204,8 @@ class Gemini(BaseLLM):
         super().__init__('gemini')
         from google import genai
         if api_key is None:
+            if args is None:
+                args = u.Args()
             api_key = args['gemini']
         os.environ["GEMINI_API_KEY"] = str(api_key)
         #genai.configure(api_key=api_key)
