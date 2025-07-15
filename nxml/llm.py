@@ -1,3 +1,5 @@
+import os
+
 import requests
 import json
 import docker
@@ -201,8 +203,9 @@ class Gemini(BaseLLM):
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__('cohere')
         from google import genai
-        genai.configure(api_key=api_key)
-        self.client = genai.Client()
+        os.environ["GEMINI_API_KEY"] = api_key
+        #genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
 
     def prompt(self, prompt, data={}):
         response = self.client.models.generate_content(
