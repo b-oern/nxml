@@ -178,24 +178,26 @@ class PiperTTS(r.BaseJobExecutor):
     def __init__(self, type='pipertts', path=None, args: u.Args = {}):
         super().__init__(type)
         self.define_sig(d.Param('text', is_pos=False))
-        self.define_vars('path')
+        self.define_vars('path', 'file')
+        self.file = None
         if path is None:
             path = args.get('pipertts', '')
         self.path = path
         self.delayed(13, lambda: u.download_resources(self.path, self.models['de']))
 
     def tts(self, text):
-        cmd = f'echo "{text}" | {self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}ausgabe.wav'
-        p = r.ProcessExecutor(cmd) # on_up=lambda proc: proc.stdin.write(text+"\n")
+        self.file = u.hash(text) + '.wav'
+        cmd = f'echo "{text}" | {self.path}piper -m {self.path}de_DE-thorsten-high.onnx -f {self.path}{self.file}'
+        p = r.ProcessExecutor(cmd)  # on_up=lambda proc: proc.stdin.write(text+"\n")
         p.waitForEnd()
-        return self.success(file=self.path+'ausgabe.wav', cmd=cmd)
+        return self.success(file=self.path+self.file, cmd=cmd)
 
     def execute(self, data):
         if 'text' in data:
             return self.tts(data['text'])
         elif 'output' in data:
             from flask import send_file
-            return send_file(self.path + 'ausgabe.wav')
+            return send_file(self.path + self.file)
         return super().execute(data)
 
     def part_index(self, p: base.Page, params={}):
