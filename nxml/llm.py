@@ -12,7 +12,7 @@ from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient import crypt
-from nwebclient.dev import Param
+from nwebclient.dev import Param, PStr
 
 from nxml import nlp
 
@@ -335,7 +335,7 @@ def query(image_path, prompt, model="mistralai/magistral-small-2509", api_key=No
                 ]
             }
         ],
-        "max_tokens": 300
+        "max_tokens": 900
     }
     try:
         response = requests.post(
@@ -364,8 +364,15 @@ class Vision(r.BaseJobExecutor):
     meta_name = 'description_de'
     limit = 10
     prompt = "Beschreibe das Bild! Antworte als JSON mit {\"Beschreibung\": \"...\"} "
+
     def __init__(self):
         super().__init__('vision')
+        self.define_vars('meta_ns', 'meta_name', 'limit', 'prompt')
+        self.define_sig(PStr('op', 'map'))
+
+    def execute_map(self, data):
+        self.nweb_map()
+        return self.success('ok')
 
     def mapFn(self, doc, n):
         filename = 'current.jpg'

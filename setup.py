@@ -49,6 +49,7 @@ if __name__ == '__main__':
                 'gptllm = nxml.llm:OpenAiLLM',
                 'cohere = nxml.llm:CohereLlm',
                 'gemini = nxml.llm:Gemini',
+                'vision = nxml.llm:Vision',
                 'tt = nxml.llm:TransformText',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs',
