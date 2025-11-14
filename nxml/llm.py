@@ -367,7 +367,7 @@ class Vision(r.BaseJobExecutor):
     def __init__(self):
         super().__init__('vision')
 
-    def mapFn(self, doc):
+    def mapFn(self, doc, n):
         filename = 'current.jpg'
         doc.downloadThumbnail(file=filename, size='m')
         r = query(filename, self.prompt)
