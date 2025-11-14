@@ -17,6 +17,7 @@ from nxml import nlp
 
 
 class BaseLLM(r.BaseJobExecutor):
+    TAGS = ['llm']
 
     def __init__(self, type='llm'):
         super().__init__()

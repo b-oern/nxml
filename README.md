@@ -1,4 +1,10 @@
-# NLP
+# NXML
+
+```
+pip install git+github.com/b-oern/nxml
+```
+
+## NLP
 
 Analyisert einen Text.
 

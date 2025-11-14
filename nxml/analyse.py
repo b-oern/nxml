@@ -153,6 +153,14 @@ class BertEmbeddings(runner.BaseJobExecutor):
 
 
 class NsfwDetector(runner.ImageExecutor):
+    """
+    apt update && apt install -y python-is-python3 python3-pip git
+    pip install nsfw-detector nwebclient git+https://github.com/b-oern/nxml --break-system-packages
+
+    -> https://github.com/steelcityamir/safe-content-ai
+
+    {"is_nsfw":false,"confidence_percentage":100.0,"file_name":"current.jpg"}
+    """
     MODULES = ['nsfw-detector']
     # model_url = 'https://s3.amazonaws.com/ir_public/ai/nsfw_models/nsfw.299x299.h5'
     model_url = 'https://s3.amazonaws.com/ir_public/nsfwjscdn/nsfw_mobilenet2.224x224.h5'
