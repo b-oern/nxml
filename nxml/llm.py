@@ -4,6 +4,7 @@ import requests
 import json
 import docker
 import time
+import base64
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
@@ -286,8 +287,7 @@ class Tool:
         # ToolCall(function=Function(name='add_two_numbers', arguments={'a': 10, 'b': 10}))]
 
 
-import requests
-import base64
+
 
 def remove_think(text):
     """
@@ -349,6 +349,7 @@ def query(image_path, prompt, model="mistralai/magistral-small-2509", api_key=No
         message = choice['message']
         choice['message']['content'] = remove_think(message['content']).strip()
         data['choices'][0] = choice
+        data['response_text'] = choice['message']['content']
         return data
     except requests.exceptions.RequestException as e:
         print(f"An error occurred: {e}")
@@ -356,3 +357,25 @@ def query(image_path, prompt, model="mistralai/magistral-small-2509", api_key=No
 
 # query('/mnt/c/Users/bsalg/Desktop/QwenImageEdit/1.png', "Beschreibe das Bild")
 # query('/mnt/c/Users/bsalg/Desktop/QwenImageEdit/1.png', "Beschreibe das Bild! Antworte als JSON mit {\"Beschreibung\": \"...\"} ")
+
+
+class Vision(r.BaseJobExecutor):
+    meta_ns = 'ai'
+    meta_name = 'description_de'
+    limit = 10
+    prompt = "Beschreibe das Bild! Antworte als JSON mit {\"Beschreibung\": \"...\"} "
+    def __init__(self):
+        super().__init__('vision')
+
+    def mapFn(self, doc):
+        filename = 'current.jpg'
+        doc.downloadThumbnail(file=filename, size='m')
+        r = query(filename, self.prompt)
+        t = r['response_text']
+        response = json.loads(t)
+        return response['Beschreibung']
+
+    def nweb_map(self):
+        from nwebclient import NWebClient
+        nc = NWebClient(None)
+        nc.mapDocMeta(self.meta_ns, self.meta_name, filterArgs='kind=image', limit=self.limit, update=True, mapFunction=self.mapFn)
