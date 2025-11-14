@@ -284,3 +284,75 @@ class Tool:
         print(response)
         # response enthält tool_calls=None oder array
         # ToolCall(function=Function(name='add_two_numbers', arguments={'a': 10, 'b': 10}))]
+
+
+import requests
+import base64
+
+def remove_think(text):
+    """
+    Removes everything between the markers ' Start' and '' in a string.
+    Parameters:
+    - text: The input string to process.
+    Returns:
+    - The processed string with the content between the markers removed.
+    """
+    start_marker = "[THINK]"
+    end_marker = "[/THINK]"
+    start_index = text.find(start_marker)
+    end_index = text.find(end_marker)
+    if start_index != -1 and end_index != -1:
+        return text[:start_index] + text[end_index + len(end_marker):]
+    else:
+        return text
+
+
+def query(image_path, prompt, model="mistralai/magistral-small-2509", api_key=None):
+    """
+    Query an OpenAI model with an image and a text prompt.
+    Parameters:
+    - api_key: Your OpenAI API key.
+    - image_path: Path to the image file you want to send.
+    - prompt: The text prompt to accompany the image.
+    - model: The model to use (default is gpt-4-vision-preview).
+    Returns:
+    - The response from the OpenAI API as a JSON object.
+    """
+    with open(image_path, "rb") as image_file:
+        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }
+        ],
+        "max_tokens": 300
+    }
+    try:
+        response = requests.post(
+            "http://127.0.0.1:1234/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+        response.raise_for_status()  # Raise an error for bad status codes
+        data = response.json()
+        choice = data['choices'][0]
+        message = choice['message']
+        choice['message']['content'] = remove_think(message['content']).strip()
+        data['choices'][0] = choice
+        return data
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred: {e}")
+        return None
+
+# query('/mnt/c/Users/bsalg/Desktop/QwenImageEdit/1.png', "Beschreibe das Bild")
+# query('/mnt/c/Users/bsalg/Desktop/QwenImageEdit/1.png', "Beschreibe das Bild! Antworte als JSON mit {\"Beschreibung\": \"...\"} ")

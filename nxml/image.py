@@ -657,3 +657,37 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
 
     def execute(self, data):
         return requests.post('http://127.0.0.1:27201/', data).json()
+
+
+class Aesthetics(r.ImageExecutor):
+    """
+    https://github.com/shunk031/simple-aesthetics-predictor
+    """
+    TAGS = [TAG.IMAGE]
+
+    MODULES = ['simple-aesthetics-predictor']
+
+    model = "shunk031/aesthetics-predictor-v1-vit-large-patch14"
+    
+    def __init__(self):
+        super().__init__('aesthetics')
+        self.load()
+
+    def load(self):
+        from transformers import CLIPProcessor
+        from aesthetics_predictor import AestheticsPredictorV1
+        self.predictor = AestheticsPredictorV1.from_pretrained(self.model)
+        self.processor = CLIPProcessor.from_pretrained(self.model)
+
+
+    def executeImage(self, image, data):
+        import torch
+        inputs = self.processor(images=image, return_tensors="pt")
+        # device = "cuda"
+        # predictor = predictor.to(device)
+        # inputs = {k: v.to(device) for k, v in inputs.items()}
+        with torch.no_grad():  # or `torch.inference_model` in torch 1.9+
+            outputs = self.predictor(**inputs)
+        prediction = outputs.logits
+        self.info(f"Aesthetics score: {prediction}")
+        return self.success(value=prediction.detach().numpy()[0][0])
