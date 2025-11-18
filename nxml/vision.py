@@ -5,6 +5,7 @@ https://huggingface.co/spaces/eyepallavi/FaceSimilarity/tree/main/app/Hackathon_
 PIP: joblib
 
 """
+import json
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -218,7 +219,19 @@ class ComfyUi(r.BaseJobExecutor):
     def __init__(self):
         super().__init__('comfyui')
 
-    def send_prompt_and_image_to_comfyui(self, prompt: str, image: any, server_url="http://127.0.0.1:8188") -> dict:
+    def merge(self, a: dict, b: dict, path=[]):
+        for key in b:
+            if key in a:
+                if isinstance(a[key], dict) and isinstance(b[key], dict):
+                    self.merge(a[key], b[key], path + [str(key)])
+                elif a[key] != b[key]:
+                    #raise Exception('Conflict at ' + '.'.join(path + [str(key)]))
+                    a[key] = b[key]
+            else:
+                a[key] = b[key]
+        return a
+
+    def send_prompt_and_image_to_comfyui(self, prompt: str, image: any, json_file='workflow.json', server_url="http://127.0.0.1:8188") -> dict:
         """
         Sendet einen Prompt und ein Bild an ComfyUI und gibt die Server-Antwort zurück.
 
@@ -230,8 +243,7 @@ class ComfyUi(r.BaseJobExecutor):
         with open(image, "rb") as f:
             image_bytes = f.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        payload = {                    # Standard-Workflow für ComfyUI /prompt
-            "prompt": {
+        b = {
                 "6": {
                     "inputs": {
                         "text": prompt
@@ -243,10 +255,12 @@ class ComfyUi(r.BaseJobExecutor):
                         "image": image_b64
                     },
                     "class_type": "LoadImage"
-                },
-                # hier kannst du deine weiteren Node-IDs/Workflow-Nodes hinzufügen
-            }
+                }
         }
+        with open(json_file, 'r') as f:
+            a = json.load(f)
+        workflow = self.merge(a, b)
+        payload = {"prompt": workflow}  # Standard-Workflow für ComfyUI /prompt
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
         return response.json()
