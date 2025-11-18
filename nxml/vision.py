@@ -19,6 +19,7 @@ RESSOURCES = {
 from nwebclient import runner as r, base
 from nwebclient.runner import TAG
 from nwebclient import util as u
+from nwebclient import dev as d
 from nwebclient import base as b
 
 import base64
@@ -218,6 +219,8 @@ class FaceSimilarity(r.ImageExecutor):
 class ComfyUi(r.BaseJobExecutor):
     def __init__(self):
         super().__init__('comfyui')
+        self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
+                        d.PStr('workflow', ''))
 
     def merge(self, a: dict, b: dict, path=[]):
         for key in b:
@@ -236,9 +239,10 @@ class ComfyUi(r.BaseJobExecutor):
         Sendet einen Prompt und ein Bild an ComfyUI und gibt die Server-Antwort zurück.
 
         :param prompt: Textprompt für das Modell
-        :param image_path: Pfad zum Eingabebild
+        :param image: Pfad zum Eingabebild, wird vom ComfyUI-Server geladen
+        :param json_file:  Prompt -> File > Export (API)
         :param server_url: URL des ComfyUI-Servers (Standard: lokal)
-        :return: JSON-Antwort des Servers
+        :return: JSON-Antwort des Servers {prompt_id, number, node_errors}
         """
         #with open(image, "rb") as f:
         #    image_bytes = f.read()
@@ -265,6 +269,10 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
+        return super().execute(data)
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
