@@ -20,6 +20,9 @@ from nwebclient.runner import TAG
 from nwebclient import util as u
 from nwebclient import base as b
 
+import base64
+import requests
+
 import math
 import torch
 import torchvision
@@ -216,4 +219,44 @@ class FaceSimilarity(r.ImageExecutor):
         p.pre('', id='result')
 
 
-__all__ = ['FaceSimilarity']
+
+class ComfyUi(r.BaseJobExecutor):
+    def __init__(self):
+        super().__init__('comfyui')
+
+    def send_prompt_and_image_to_comfyui(self, prompt: str, image: any, server_url="http://127.0.0.1:8188") -> dict:
+        """
+        Sendet einen Prompt und ein Bild an ComfyUI und gibt die Server-Antwort zurück.
+
+        :param prompt: Textprompt für das Modell
+        :param image_path: Pfad zum Eingabebild
+        :param server_url: URL des ComfyUI-Servers (Standard: lokal)
+        :return: JSON-Antwort des Servers
+        """
+        with open(image, "rb") as f:
+            image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        payload = {                    # Standard-Workflow für ComfyUI /prompt
+            "prompt": {
+                "6": {
+                    "inputs": {
+                        "text": prompt
+                    },
+                    "class_type": "CLIPTextEncode"
+                },
+                "54": {
+                    "inputs": {
+                        "image": image_b64
+                    },
+                    "class_type": "LoadImage"
+                },
+                # hier kannst du deine weiteren Node-IDs/Workflow-Nodes hinzufügen
+            }
+        }
+        response = requests.post(f"{server_url}/prompt", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+
+__all__ = ['FaceSimilarity', 'ComfyUi']
