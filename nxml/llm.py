@@ -379,7 +379,7 @@ class Vision(r.BaseJobExecutor):
         doc.downloadThumbnail(file=filename, size='m')
         r = query(filename, self.prompt)
         t = r['response_text']
-        response = json.loads(t)
+        response = json.loads(t.replace('```json', '').replace('```', ''))
         return response['Beschreibung']
 
     def nweb_map(self):
