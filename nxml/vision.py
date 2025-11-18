@@ -240,9 +240,9 @@ class ComfyUi(r.BaseJobExecutor):
         :param server_url: URL des ComfyUI-Servers (Standard: lokal)
         :return: JSON-Antwort des Servers
         """
-        with open(image, "rb") as f:
-            image_bytes = f.read()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        #with open(image, "rb") as f:
+        #    image_bytes = f.read()
+        #image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         b = {
                 "6": {
                     "inputs": {
@@ -252,7 +252,7 @@ class ComfyUi(r.BaseJobExecutor):
                 },
                 "54": {
                     "inputs": {
-                        "image": image_b64
+                        "image": image
                     },
                     "class_type": "LoadImage"
                 }
