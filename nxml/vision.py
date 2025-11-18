@@ -5,6 +5,7 @@ https://huggingface.co/spaces/eyepallavi/FaceSimilarity/tree/main/app/Hackathon_
 PIP: joblib
 
 """
+import json
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -18,7 +19,11 @@ RESSOURCES = {
 from nwebclient import runner as r, base
 from nwebclient.runner import TAG
 from nwebclient import util as u
+from nwebclient import dev as d
 from nwebclient import base as b
+
+import base64
+import requests
 
 import math
 import torch
@@ -33,12 +38,6 @@ from matplotlib import pyplot as plt
 import torch
 from PIL import Image
 import base64
-import io
-import os
-import joblib
-import pickle
-from joblib import load
-
 
 current_path = './'
 
@@ -216,4 +215,64 @@ class FaceSimilarity(r.ImageExecutor):
         p.pre('', id='result')
 
 
-__all__ = ['FaceSimilarity']
+
+class ComfyUi(r.BaseJobExecutor):
+    def __init__(self):
+        super().__init__('comfyui')
+        self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
+                        d.PStr('workflow', ''))
+
+    def merge(self, a: dict, b: dict, path=[]):
+        for key in b:
+            if key in a:
+                if isinstance(a[key], dict) and isinstance(b[key], dict):
+                    self.merge(a[key], b[key], path + [str(key)])
+                elif a[key] != b[key]:
+                    #raise Exception('Conflict at ' + '.'.join(path + [str(key)]))
+                    a[key] = b[key]
+            else:
+                a[key] = b[key]
+        return a
+
+    def send_prompt_and_image_to_comfyui(self, prompt: str, image: any, json_file='workflow.json', server_url="http://127.0.0.1:8188") -> dict:
+        """
+        Sendet einen Prompt und ein Bild an ComfyUI und gibt die Server-Antwort zurück.
+
+        :param prompt: Textprompt für das Modell
+        :param image: Pfad zum Eingabebild, wird vom ComfyUI-Server geladen
+        :param json_file:  Prompt -> File > Export (API)
+        :param server_url: URL des ComfyUI-Servers (Standard: lokal)
+        :return: JSON-Antwort des Servers {prompt_id, number, node_errors}
+        """
+        #with open(image, "rb") as f:
+        #    image_bytes = f.read()
+        #image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        b = {
+                "6": {
+                    "inputs": {
+                        "text": prompt
+                    },
+                    "class_type": "CLIPTextEncode"
+                },
+                "54": {
+                    "inputs": {
+                        "image": image
+                    },
+                    "class_type": "LoadImage"
+                }
+        }
+        with open(json_file, 'r') as f:
+            a = json.load(f)
+        workflow = self.merge(a, b)
+        payload = {"prompt": workflow}  # Standard-Workflow für ComfyUI /prompt
+        response = requests.post(f"{server_url}/prompt", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def execute(self, data):
+        if 'prompt' in data:
+            return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
+        return super().execute(data)
+
+
+__all__ = ['FaceSimilarity', 'ComfyUi']
