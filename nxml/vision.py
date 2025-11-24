@@ -260,6 +260,7 @@ class ComfyUi(r.BaseJobExecutor):
                     },
                     "class_type": "LoadImage"
                 }
+            # 28 input filename_prefix    SaveAnimateWEBP
         }
         with open(json_file, 'r') as f:
             a = json.load(f)
