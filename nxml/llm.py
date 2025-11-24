@@ -46,13 +46,18 @@ class BaseLLM(r.BaseJobExecutor):
             return self.cprompt(data)
         return super().execute(data)
 
-    def page_index(self, params={}):
-        p = b.Page(owner=self)
+    def part_index(self, p: b.Page, params={}):
         #p.input('prompt', id='prompt')
         p('<textarea style="width:90%; height:300px" name="prompt" id="prompt"></textarea>')
-        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
-        p.div('', id='result')
-        return p.nxui()
+        func = """
+            function x(data) {
+                var resp = data["response"].replace('\\n', '<br />');
+                document.getElementById("result_view").innerHTML = resp; 
+            }
+        """
+        p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"}, '+func+')'))
+        p.div('', id='result_view')
+        p.pre('', id='result')
 
 
 class OpenAiLLM(BaseLLM):
