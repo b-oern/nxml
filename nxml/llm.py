@@ -73,7 +73,7 @@ class OpenAiLLM(BaseLLM):
     def prompt(self, prompt, data):
         self.last_request = time.time()
         from openai import OpenAI
-        if self.host is None:
+        if self.baseUrl is None:
             client = OpenAI(api_key=self.key)
         else:
             client = OpenAI(baseUrl=self.baseUrl)
