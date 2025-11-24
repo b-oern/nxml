@@ -49,7 +49,7 @@ class BaseLLM(r.BaseJobExecutor):
     def page_index(self, params={}):
         p = b.Page(owner=self)
         #p.input('prompt', id='prompt')
-        p('<textarea style="width:90%: height:300px" name="prompt"></textarea>')
+        p('<textarea style="width:90%; height:300px" name="prompt" id="prompt"></textarea>')
         p(w.button_js("Prompt", 'exec_job_p({"type": "' + self.type + '", "prompt": "#prompt"})'))
         p.div('', id='result')
         return p.nxui()
