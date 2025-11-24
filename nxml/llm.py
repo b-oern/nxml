@@ -62,11 +62,11 @@ class OpenAiLLM(BaseLLM):
 
     def __init__(self, api_key=None, args: u.Args = None):
         super().__init__('gptllm')
-        self.model = args.get('OPENAI_MODEL', 'gpt-4o')
         self.last_request = 0
         self.define_vars('model', 'last_request')
         if args is None:
             args = u.Args()
+        self.model = args.get('OPENAI_MODEL', 'gpt-4o')
         self.key = args.get('OPENAI_KEY')
         self.baseUrl = args.get('OPENAI_BASEURL', None)
 
