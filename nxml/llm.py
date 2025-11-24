@@ -68,15 +68,15 @@ class OpenAiLLM(BaseLLM):
             args = u.Args()
         self.model = args.get('OPENAI_MODEL', 'gpt-4o')
         self.key = args.get('OPENAI_KEY')
-        self.baseUrl = args.get('OPENAI_BASEURL', None)
+        self.base_url = args.get('OPENAI_BASEURL', None)
 
     def prompt(self, prompt, data):
         self.last_request = time.time()
         from openai import OpenAI
-        if self.baseUrl is None:
+        if self.base_url is None:
             client = OpenAI(api_key=self.key)
         else:
-            client = OpenAI(baseUrl=self.baseUrl)
+            client = OpenAI(base_url=self.base_url)
 
         # messages = []
         # system_content = '''You are a marketing assistant called MarkBot.
