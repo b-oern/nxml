@@ -217,6 +217,9 @@ class FaceSimilarity(r.ImageExecutor):
 
 
 class ComfyUi(r.BaseJobExecutor):
+    """
+      comfyui: nxml.vision:ComfyUi
+    """
     def __init__(self):
         super().__init__('comfyui')
         self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
@@ -270,9 +273,22 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json',
+                                         server_url="http://127.0.0.1:8188") -> dict:
+        with open(json_file, 'r') as f:
+            a = json.load(f)
+        workflow = self.merge(a, prompt)
+        payload = {"prompt": workflow}  # Standard-Workflow für ComfyUI /prompt
+        response = requests.post(f"{server_url}/prompt", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
     def execute(self, data):
-        if 'prompt' in data:
+        if 'prompt' in data and 'image' in data:
             return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
+        elif 'prompt' in data:
+            return self.send_promptto_comfyui(data['prompt'], data['workflow'])
         return super().execute(data)
 
 
