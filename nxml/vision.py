@@ -288,7 +288,7 @@ class ComfyUi(r.BaseJobExecutor):
         if 'prompt' in data and 'image' in data:
             return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
         elif 'prompt' in data:
-            return self.send_promptto_comfyui(data['prompt'], data['workflow'])
+            return self.send_prompt_to_comfyui(data['prompt'], data['workflow'])
         return super().execute(data)
 
 
