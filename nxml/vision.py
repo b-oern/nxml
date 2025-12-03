@@ -220,8 +220,11 @@ class ComfyUi(r.BaseJobExecutor):
     """
       comfyui: nxml.vision:ComfyUi
     """
-    def __init__(self):
+    def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
+        self.cfg = args.get(self.type, {})
+        self.server_url = server_url
+        self.define_vars('server_url')
         self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
                         d.PStr('workflow', ''))
 
@@ -247,6 +250,8 @@ class ComfyUi(r.BaseJobExecutor):
         :param server_url: URL des ComfyUI-Servers (Standard: lokal)
         :return: JSON-Antwort des Servers {prompt_id, number, node_errors}
         """
+        if server_url is None:
+            server_url = self.server_url
         #with open(image, "rb") as f:
         #    image_bytes = f.read()
         #image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -275,6 +280,8 @@ class ComfyUi(r.BaseJobExecutor):
 
     def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json',
                                          server_url="http://127.0.0.1:8188") -> dict:
+        if server_url is None:
+            server_url = self.server_url
         with open(json_file, 'r') as f:
             a = json.load(f)
         workflow = self.merge(a, prompt)
@@ -283,6 +290,41 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def history(self):
+        response = requests.get(self.server_url + '/history')
+        # object(guid: {"prompt": ..., "outputs": ..., status: { completed}})
+        response.raise_for_status()
+        return response.json()
+
+    def queue(self):
+        response = requests.get(self.server_url + '/queue')
+        # { queue_running: [...], queue_pending: [ [nr,guid, prompt-obj, [int,int,int]] ] }
+        response.raise_for_status()
+        return response.json()
+
+    def system_stats(self):
+        response = requests.get(self.server_url + '/queue')
+        # { system: {os:, ram_total:}, "devices": [{name:, vram_total:, vram_free},..] }
+        response.raise_for_status()
+        return response.json()
+
+    def free(self):
+        response = requests.post(self.server_url + '/free')
+        # { system: {os:, ram_total:}, "devices": [{name:, vram_total:, vram_free},..] }
+        response.raise_for_status()
+        return response.json()
+
+    def execute_rest(self, data):
+        routes = ['history', 'queue', 'system_stats', 'free']
+        if data['route'] in routes:
+            op = getattr(self, data['route'])
+            return op()
+        else:
+            return self.fail('route not in routes')
+
+    def execute_queue_count(self):
+        j = self.queue()
+        return self.success(value=len(j.get('queue_pending', [])))
 
     def execute(self, data):
         if 'prompt' in data and 'image' in data:
@@ -290,6 +332,15 @@ class ComfyUi(r.BaseJobExecutor):
         elif 'prompt' in data:
             return self.send_prompt_to_comfyui(data['prompt'], data['workflow'])
         return super().execute(data)
+
+    def part_index(self, p: base.Page, params={}):
+        p.div("Start ComfyUi Jobs")
+        p.div("Workflows")
+        p.ul(self.cfg.get('workflows', []))
+        p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
+        p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
+        p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
+        p.pre('', id='result')
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
