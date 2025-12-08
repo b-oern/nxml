@@ -6,6 +6,7 @@ PIP: joblib
 
 """
 import json
+import time
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -278,16 +279,34 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def inject_prompt(self, prompt, workflow):
+        for k in workflow.keys():
+            if (workflow[k].get('class_type', '') == 'CLIPTextEncode' and
+                    "Positive Prompt" in workflow[k].get('_meta', {}).get('title', "")):
+                return {
+                   k: {
+                       "inputs": {
+                            "text": prompt
+                       }
+                   }
+                }
+
     def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json',
-                                         server_url="http://127.0.0.1:8188") -> dict:
+                                         server_url="http://127.0.0.1:8188", data={}) -> dict:
         if server_url is None:
             server_url = self.server_url
         with open(json_file, 'r') as f:
             a = json.load(f)
+        if isinstance(prompt, str):
+            prompt = self.inject_prompt(prompt, a)
         workflow = self.merge(a, prompt)
         payload = {"prompt": workflow}  # Standard-Workflow für ComfyUI /prompt
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
+        if data.get('count', 1) > 1:
+            for i in range(data.get('count')):
+                response = requests.post(f"{server_url}/prompt", json=payload)
+                time.sleep(3)
         return response.json()
 
     def history(self):
@@ -330,7 +349,7 @@ class ComfyUi(r.BaseJobExecutor):
         if 'prompt' in data and 'image' in data:
             return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
         elif 'prompt' in data:
-            return self.send_prompt_to_comfyui(data['prompt'], data['workflow'])
+            return self.send_prompt_to_comfyui(data['prompt'], data['workflow'], data=data)
         return super().execute(data)
 
     def part_index(self, p: base.Page, params={}):
