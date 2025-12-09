@@ -369,7 +369,7 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
-        p.ul([w.a("Prompt", self.link(self.part_prompt)]))
+        p.ul([w.a("Prompt", self.link(self.part_prompt))])
         p.pre('', id='result')
 
     def part_prompt(self, p: base.Page, params={}):
