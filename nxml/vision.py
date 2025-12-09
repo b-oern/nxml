@@ -10,6 +10,7 @@ import time
 import base64
 import requests
 import random
+import os.path
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -229,7 +230,8 @@ class ComfyUi(r.BaseJobExecutor):
         super().__init__('comfyui')
         self.cfg = args.get(self.type, {})
         self.server_url = server_url
-        self.define_vars('server_url')
+        self.wait_time = 4
+        self.define_vars('server_url', 'wait_time')
         self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
                         d.PStr('workflow', ''))
 
@@ -316,7 +318,7 @@ class ComfyUi(r.BaseJobExecutor):
             for i in range(data.get('count')):
                 payload = {"prompt": self.inject_seed(workflow)}
                 response = requests.post(f"{server_url}/prompt", json=payload)
-                time.sleep(3)
+                time.sleep(self.wait_time)
         return response.json()
 
     def history(self):
@@ -351,9 +353,19 @@ class ComfyUi(r.BaseJobExecutor):
         else:
             return self.fail('route not in routes')
 
-    def execute_queue_count(self):
+    def execute_queue_count(self, data={}):
         j = self.queue()
         return self.success(value=len(j.get('queue_pending', [])))
+
+    def execute_queue(self, data={}):
+        data.pop('op')
+        path = self.cfg.get('jobpath', '.')
+        guid = u.guid()
+        data['guid'] = guid
+        with open(os.path.join(path, guid + 'job.json', 'w')) as f:
+            json.dump(data, f)
+        return self.success(job_id=guid)
+
 
     def execute(self, data):
         if 'prompt' in data and 'image' in data:
@@ -375,7 +387,10 @@ class ComfyUi(r.BaseJobExecutor):
     def part_prompt(self, p: base.Page, params={}):
         p('<textarea id="prompt"></textarea>')
         p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
-        p(self.action_btn_parametric("Execute", dict(prompt='#prompt', type=self.type, workflow='#workflow')))
+        p.input('count', value='10', id='count')
+        base_p = dict(prompt='#prompt', type=self.type, workflow='#workflow', count='#count')
+        p(self.action_btn_parametric("Execute", base_p))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}))
         p.pre('', id='result')
 
 
