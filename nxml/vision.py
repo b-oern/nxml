@@ -20,6 +20,7 @@ from nwebclient import runner as r, base
 from nwebclient.runner import TAG
 from nwebclient import util as u
 from nwebclient import dev as d
+from nwebclient import web as w
 from nwebclient import base as b
 
 import base64
@@ -340,7 +341,14 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
+        p.ul(w.a("Prompt", self.link(self.part_prompt)))
         p.pre('', id='result')
+
+    def part_prompt(self, p: base.Page, params={}):
+        p('<textarea id="prompt"></textarea>')
+        p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
+        p(self.action_btn_parametric("Execute", dict(prompt='#prompt', type=self.type, workflow='#workflow')))
+
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
