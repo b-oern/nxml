@@ -221,10 +221,14 @@ class FaceSimilarity(r.ImageExecutor):
         p.pre('', id='result')
 
 
-
 class ComfyUi(r.BaseJobExecutor):
     """
       comfyui: nxml.vision:ComfyUi
+      comfyui:
+        workflows:
+            - path/w.json
+        jobpath: /path/to/jobs/
+
     """
     def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
@@ -296,6 +300,9 @@ class ComfyUi(r.BaseJobExecutor):
                        }
                    }
                 }
+
+    def inject_resolution(self, width, height, workflow):
+        pass # TODO
     def inject_seed(self, workflow):
         for k in workflow.keys():
             if 'seed' in workflow[k].get('inputs', {}):
@@ -311,7 +318,7 @@ class ComfyUi(r.BaseJobExecutor):
         if isinstance(prompt, str):
             prompt = self.inject_prompt(prompt, a)
         workflow = self.merge(a, prompt)
-        payload = {"prompt": workflow}  # Standard-Workflow für ComfyUI /prompt
+        payload = {"prompt": workflow}
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
         if data.get('count', 1) > 1:
@@ -385,7 +392,7 @@ class ComfyUi(r.BaseJobExecutor):
         p.pre('', id='result')
 
     def part_prompt(self, p: base.Page, params={}):
-        p('<textarea id="prompt"></textarea>')
+        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
         p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
         p.input('count', value='10', id='count')
         base_p = dict(prompt='#prompt', type=self.type, workflow='#workflow', count='#count')
