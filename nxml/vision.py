@@ -7,6 +7,9 @@ PIP: joblib
 """
 import json
 import time
+import base64
+import requests
+import random
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -24,8 +27,8 @@ from nwebclient import dev as d
 from nwebclient import web as w
 from nwebclient import base as b
 
-import base64
-import requests
+
+
 
 import math
 import torch
@@ -291,6 +294,11 @@ class ComfyUi(r.BaseJobExecutor):
                        }
                    }
                 }
+    def inject_seed(self, workflow):
+        for k in workflow.keys():
+            if 'seed' in workflow[k].get('inputs', {}):
+                workflow[k]['inputs']['seed'] = random.randint(0, 4200000000000000)
+        return workflow
 
     def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json',
                                          server_url="http://127.0.0.1:8188", data={}) -> dict:
@@ -306,6 +314,7 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         if data.get('count', 1) > 1:
             for i in range(data.get('count')):
+                payload = {"prompt": self.inject_seed(workflow)}
                 response = requests.post(f"{server_url}/prompt", json=payload)
                 time.sleep(3)
         return response.json()
@@ -360,13 +369,14 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
-        p.ul(w.a("Prompt", self.link(self.part_prompt)))
+        p.ul([w.a("Prompt", self.link(self.part_prompt)]))
         p.pre('', id='result')
 
     def part_prompt(self, p: base.Page, params={}):
         p('<textarea id="prompt"></textarea>')
         p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
         p(self.action_btn_parametric("Execute", dict(prompt='#prompt', type=self.type, workflow='#workflow')))
+        p.pre('', id='result')
 
 
 
