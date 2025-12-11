@@ -51,6 +51,7 @@ if __name__ == '__main__':
                 'gemini = nxml.llm:Gemini',
                 'vision = nxml.llm:Vision',
                 'tt = nxml.llm:TransformText',
+                'llmproxy = nxml.proxy:LlmProxy'
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs',
                 'pipertts = nxml.audio:PiperTTS',
