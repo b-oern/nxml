@@ -28,9 +28,6 @@ from nwebclient import dev as d
 from nwebclient import web as w
 from nwebclient import base as b
 
-
-
-
 import math
 import torch
 import torchvision
@@ -228,27 +225,33 @@ class ComfyUi(r.BaseJobExecutor):
         workflows:
             - path/w.json
         jobpath: /path/to/jobs/
+        comfyui_path: /mnt/l/ComfyUI_windows_portable/ComfyUI
 
     """
     def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
         self.cfg = args.get(self.type, {})
         self.server_url = server_url
+        if 'server_url' in self.cfg:
+            self.server_url = self.cfg['server_url'].strip()
         self.wait_time = 4
         self.define_vars('server_url', 'wait_time')
         self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
                         d.PStr('workflow', ''))
 
     def merge(self, a: dict, b: dict, path=[]):
-        for key in b:
-            if key in a:
-                if isinstance(a[key], dict) and isinstance(b[key], dict):
-                    self.merge(a[key], b[key], path + [str(key)])
-                elif a[key] != b[key]:
-                    #raise Exception('Conflict at ' + '.'.join(path + [str(key)]))
+        try:
+            for key in b:
+                if key in a:
+                    if isinstance(a[key], dict) and isinstance(b[key], dict):
+                        self.merge(a[key], b[key], path + [str(key)])
+                    elif a[key] != b[key]:
+                        #raise Exception('Conflict at ' + '.'.join(path + [str(key)]))
+                        a[key] = b[key]
+                else:
                     a[key] = b[key]
-            else:
-                a[key] = b[key]
+        except Exception as e:
+            self.info("Merge fail: " + str(e))
         return a
 
     def send_prompt_and_image_to_comfyui(self, prompt: str, image: any, json_file='workflow.json', server_url="http://127.0.0.1:8188") -> dict:
@@ -303,21 +306,49 @@ class ComfyUi(r.BaseJobExecutor):
 
     def inject_resolution(self, width, height, workflow):
         pass # TODO
+
     def inject_seed(self, workflow):
         for k in workflow.keys():
             if 'seed' in workflow[k].get('inputs', {}):
                 workflow[k]['inputs']['seed'] = random.randint(0, 4200000000000000)
         return workflow
 
-    def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json',
-                                         server_url="http://127.0.0.1:8188", data={}) -> dict:
+    def inject_file_by_title(self, workflow, title, file_data, ext='png', input_key='image', fileid=None):
+        if fileid is None:
+            fileid = u.guid()
+        name = fileid + '.' + ext
+        self.info(f"Injecting: {title} with {name}")
+        with open(os.path.join(self.cfg['comfyui_path'], 'input', name), 'wb') as f:
+            f.write(base64.b64decode(file_data))
+        for k in workflow.keys():
+            if workflow[k].get('_meta', {}).get('title', '') == title:
+                self.info(f"Injection success: {title}")
+                workflow[k]['inputs'][input_key] = name
+        return workflow
+
+    def inject_value_by_title(self, workflow, title, input_key, value):
+        for k in workflow.keys():
+            if workflow[k].get('_meta', {}).get('title', '') == title:
+                workflow[k]['inputs'][input_key] = value
+        return workflow
+
+    def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json', server_url=None, data={}) -> dict:
+        self.info(f"Sending prompt to comfyui, extras: " + str(data.keys()))
         if server_url is None:
             server_url = self.server_url
         with open(json_file, 'r') as f:
             a = json.load(f)
         if isinstance(prompt, str):
             prompt = self.inject_prompt(prompt, a)
-        workflow = self.merge(a, prompt)
+        workflow = self.merge(a, prompt if prompt is not None else {})
+        if 'file_title' in data and 'file_data' in data:
+            data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
+        if 'files' in data:
+            for file in data['files']:
+                workflow = self.inject_file_by_title(workflow, file['title'], file['data'], data.get('ext', 'png'),
+                                                     data.get('input_key', 'image'), data.get('fileid', None))
+        for elem in data.get('values', []):
+            workflow = self.inject_value_by_title(workflow, elem['title'], elem['key'], elem['key'])
         payload = {"prompt": workflow}
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
@@ -369,15 +400,17 @@ class ComfyUi(r.BaseJobExecutor):
         path = self.cfg.get('jobpath', '.')
         guid = u.guid()
         data['guid'] = guid
-        with open(os.path.join(path, guid + 'job.json', 'w')) as f:
+        if 'file_title' in data and 'file_data' in data:
+            data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
+        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
             json.dump(data, f)
         return self.success(job_id=guid)
 
 
     def execute(self, data):
-        if 'prompt' in data and 'image' in data:
+        if 'prompt' in data and 'image' in data and 'op' not in data:
             return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
-        elif 'prompt' in data:
+        elif 'prompt' in data and 'op' not in data:
             return self.send_prompt_to_comfyui(data['prompt'], data['workflow'], data=data)
         return super().execute(data)
 
@@ -388,7 +421,8 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
-        p.ul([w.a("Prompt", self.link(self.part_prompt))])
+        p.ul([w.a("Prompt", self.link(self.part_prompt)),
+              w.a("Image Transform", self.link(self.part_image_transform))])
         p.pre('', id='result')
 
     def part_prompt(self, p: base.Page, params={}):
@@ -400,6 +434,26 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}))
         p.pre('', id='result')
 
+    def part_image_transform(self, p: base.Page, params={}):
+        p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+        p('<div id="dropZone" style="width:300px;height:200px;border:2px dashed #999; display:flex;align-items:center;justify-content:center;">Bild hier ablegen</div>')
+        p('<input type="hidden" id="image_data" name="image_data">')
+        p.form_input('image_title', "Image Input Title", id='image_title')
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow')
+        p(self.action_btn_parametric("Queue", {
+            'type': self.type,
+            'op': 'queue',
+            'workflow': '#workflow',
+            'file_data': '#image_data',
+            'file_title': '#image_title'
+        }))
+        p(self.action_btn_parametric('Exec', {
+            'type': self.type,
+            'prompt': '',
+            'workflow': '#workflow',
+            'file_data': '#image_data',
+            'file_title': '#image_title'
+        }))
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
