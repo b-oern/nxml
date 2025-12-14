@@ -352,8 +352,8 @@ class ComfyUi(r.BaseJobExecutor):
         payload = {"prompt": workflow}
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
-        if data.get('count', 1) > 1:
-            for i in range(data.get('count')):
+        if int(data.get('count', 1)) > 1:
+            for i in range(int(data.get('count'))):
                 payload = {"prompt": self.inject_seed(workflow)}
                 response = requests.post(f"{server_url}/prompt", json=payload)
                 time.sleep(self.wait_time)
@@ -405,7 +405,6 @@ class ComfyUi(r.BaseJobExecutor):
         with open(os.path.join(path, guid + '.job.json'), 'w') as f:
             json.dump(data, f)
         return self.success(job_id=guid)
-
 
     def execute(self, data):
         if 'prompt' in data and 'image' in data and 'op' not in data:
