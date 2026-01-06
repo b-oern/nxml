@@ -230,14 +230,16 @@ class ComfyUi(r.BaseJobExecutor):
     """
     def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
+        if args is None:
+            args = u.Args()
         self.cfg = args.get(self.type, {})
         self.server_url = server_url
         if 'server_url' in self.cfg:
             self.server_url = self.cfg['server_url'].strip()
         self.wait_time = 4
-        self.define_vars('server_url', 'wait_time')
-        self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''),
-                        d.PStr('workflow', ''))
+        self.default_count = 10
+        self.define_vars('server_url', 'wait_time', 'default_count')
+        self.define_sig(d.PStr('prompt', ''), d.PStr('image', ''), d.PStr('workflow', ''))
 
     def merge(self, a: dict, b: dict, path=[]):
         try:
@@ -365,6 +367,12 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def history_job(self, jobid):
+        response = requests.get(self.server_url + f'/history/{jobid}')
+        # object(guid: {"prompt": ..., "outputs": ..., status: { completed}})
+        response.raise_for_status()
+        return response.json()
+
     def queue(self):
         response = requests.get(self.server_url + '/queue')
         # { queue_running: [...], queue_pending: [ [nr,guid, prompt-obj, [int,int,int]] ] }
@@ -383,6 +391,48 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def wait_for_job(self, jobid):
+        while True:
+            res = self.history_job(jobid)
+            if len(list(res.keys())) > 0:
+                break
+            time.sleep(1)
+        return res
+
+    def run_for_str(self, workflow_file, image):
+        with open(workflow_file, 'r') as f:
+            workflow = json.load(f)
+        filename, file_extension = os.path.splitext(image)
+        with open(image, 'rb') as f:
+            b64data = base64.b64encode(f.read())
+            workflow = self.inject_file_by_title(workflow, 'LoadImageEx', b64data,
+                                                 file_extension, 'image', None)
+        payload = {"prompt": workflow}
+        response = requests.post(f"{self.server_url}/prompt", json=payload)
+        res = response.json()
+        jobid = res['prompt_id']
+        result = self.wait_for_job(jobid)
+        print(str(result))
+        outputs = result.get(jobid, {}).get('outputs', {})
+        for output in outputs.values():
+            # "text": [ "photo,brown_hair, boots" ]
+            s = output.get('text', None)
+            if s is not None:
+                return s[0]
+        return None
+
+    def nweb_image_map(self, workflow_file, meta_ns, meta_name, instance=None, limit=10):
+        from nwebclient import NWebClient, NWebDoc
+        n = NWebClient(instance)
+        filterArgs = 'kind=image'
+        def map_fn(doc: NWebDoc, c):
+            doc.downloadThumbnail('current.jpg', 'm')
+            s = self.run_for_str(workflow_file, 'current.jpg')
+            os.remove('current.jpg')
+            return s
+        n.mapDocMeta(meta_ns=meta_ns, meta_name=meta_name, filterArgs=filterArgs, limit=limit, update=True,
+                     mapFunction=map_fn)
+
     def execute_rest(self, data):
         routes = ['history', 'queue', 'system_stats', 'free']
         if data['route'] in routes:
@@ -400,6 +450,10 @@ class ComfyUi(r.BaseJobExecutor):
         path = self.cfg.get('jobpath', '.')
         guid = u.guid()
         data['guid'] = guid
+        if 'count' not in data:
+            data['count'] = self.default_count
+        if 'workflow' not in data:
+            data['workflow'] = self.cfg.get('workflows', [''])[0]
         if 'file_title' in data and 'file_data' in data:
             data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
         with open(os.path.join(path, guid + '.job.json'), 'w') as f:
@@ -435,7 +489,7 @@ class ComfyUi(r.BaseJobExecutor):
 
     def part_image_transform(self, p: base.Page, params={}):
         p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
-        p('<div id="dropZone" style="width:300px;height:200px;border:2px dashed #999; display:flex;align-items:center;justify-content:center;">Bild hier ablegen</div>')
+        p(w.dropzone(title="Bild hier ablegen"))
         p('<input type="hidden" id="image_data" name="image_data">')
         p.form_input('image_title', "Image Input Title", id='image_title')
         p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow')
