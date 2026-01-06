@@ -56,6 +56,7 @@ if __name__ == '__main__':
                 'tts = nxml.audio:ElevenLabs',
                 'pipertts = nxml.audio:PiperTTS',
                 'face_similarity = nxml.vision:FaceSimilarity',
+                'comfyui = nxml.vision:ComfyUi',
                 'imap = nxml.data:Imap'
             ]
         },

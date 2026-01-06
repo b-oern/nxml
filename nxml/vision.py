@@ -470,13 +470,22 @@ class ComfyUi(r.BaseJobExecutor):
     def part_index(self, p: base.Page, params={}):
         p.div("Start ComfyUi Jobs")
         p.div("Workflows")
-        p.ul(self.cfg.get('workflows', []))
+        p.ul(map(lambda x: w.a(x, self.link(self.part_workflow, f'w={x}')),self.cfg.get('workflows', [])))
         p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
         p.ul([w.a("Prompt", self.link(self.part_prompt)),
               w.a("Image Transform", self.link(self.part_image_transform))])
         p.pre('', id='result')
+
+    def part_workflow(self, p: base.Page, params={}):
+        p.h2("Workflow")
+        wf = params['w']
+        wf_data = u.load_json_file(wf)
+        for key, value in wf_data.items():
+            p.div(f'{value.get("_meta", {}).get("title")} - {value.get("class_type")}')
+            # LoadImage # TextEncodeQwenImageEditPlus # CLIPTextEncode
+
 
     def part_prompt(self, p: base.Page, params={}):
         p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
@@ -490,23 +499,31 @@ class ComfyUi(r.BaseJobExecutor):
     def part_image_transform(self, p: base.Page, params={}):
         p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
         p(w.dropzone(title="Bild hier ablegen"))
-        p('<input type="hidden" id="image_data" name="image_data">')
+        p.hidden('image_data', '', "image_data")
         p.form_input('image_title', "Image Input Title", id='image_title')
-        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow')
-        p(self.action_btn_parametric("Queue", {
-            'type': self.type,
-            'op': 'queue',
-            'workflow': '#workflow',
-            'file_data': '#image_data',
-            'file_title': '#image_title'
-        }))
-        p(self.action_btn_parametric('Exec', {
-            'type': self.type,
-            'prompt': '',
-            'workflow': '#workflow',
-            'file_data': '#image_data',
-            'file_title': '#image_title'
-        }))
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow', suggestions=self.cfg.get('workflows', []))
+
+        p.form_elem(
+            self.action_btn_parametric("Queue", dict(
+                type=self.type,
+                op='queue',
+                workflow='#workflow',
+                file_data='#image_data',
+                file_title='#image_title'
+            )) +
+            self.action_btn_parametric('Exec', {
+                'type': self.type,
+                'prompt': '',
+                'workflow': '#workflow',
+                'file_data': '#image_data',
+                'file_title': '#image_title'
+            })
+        )
+
+    def part_image_transform2(self, p: base.Page, params={}):
+        p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+        p('<div id="dropZone" style="width:300px;height:200px;border:2px dashed #999; display:flex;align-items:center;justify-content:center;">Bild hier ablegen</div>')
+        p.hidden('image_data', '', "image_data")
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
