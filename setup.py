@@ -54,6 +54,7 @@ if __name__ == '__main__':
                 'llmproxy = nxml.proxy:LlmProxy',
                 'whisper = nxml.analyse:Whisper',
                 'tts = nxml.audio:ElevenLabs',
+                'qtts = nxml.tts:Qwen3TTS',
                 'pipertts = nxml.audio:PiperTTS',
                 'face_similarity = nxml.vision:FaceSimilarity',
                 'comfyui = nxml.vision:ComfyUi',
