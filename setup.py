@@ -39,6 +39,7 @@ if __name__ == '__main__':
                 'od = nxml.image:ObjectDetector',
                 'ic = nxml.image:ImageClassifier',
                 'aesthetics = nxml.image:Aesthetics',
+                'depth = nxml.image:DepthEstimation',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
                 'document = nxml.image:DocumentAnalysis',

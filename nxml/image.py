@@ -9,6 +9,8 @@ import time
 import glob
 from scipy.spatial.distance import cosine
 import requests
+import base64
+from io import BytesIO
 
 from nwebclient import runner as r
 from nwebclient.runner import TAG
@@ -691,3 +693,24 @@ class Aesthetics(r.ImageExecutor):
         prediction = outputs.logits
         self.info(f"Aesthetics score: {prediction}")
         return self.success(value=prediction.detach().numpy()[0][0])
+
+
+class DepthEstimation(r.ImageExecutor):
+    """
+    https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
+    """
+    def __init__(self, type='depth'):
+        super().__init__(type)
+        from transformers import pipeline
+        self.pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
+
+    def to_b64(image) -> str:
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue())
+        return encoded.decode("utf-8")
+
+    def executeImage(self, image, data):
+        depthmap = self.pipe(image)["depth"]
+        return self.success(image=self.to_b64(depthmap))
+
