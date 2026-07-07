@@ -11,6 +11,10 @@ import base64
 import requests
 import random
 import os.path
+from collections.abc import Mapping
+from pathlib import Path
+import random
+import sys
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -336,8 +340,7 @@ class ComfyUi(r.BaseJobExecutor):
 
     def send_prompt_to_comfyui(self, prompt: any, json_file='workflow.json', server_url=None, data={}) -> dict:
         self.info(f"Sending prompt to comfyui, extras: " + str(data.keys()))
-        if server_url is None:
-            server_url = self.server_url
+
         with open(json_file, 'r') as f:
             a = json.load(f)
         if isinstance(prompt, str):
@@ -350,7 +353,12 @@ class ComfyUi(r.BaseJobExecutor):
                 workflow = self.inject_file_by_title(workflow, file['title'], file['data'], data.get('ext', 'png'),
                                                      data.get('input_key', 'image'), data.get('fileid', None))
         for elem in data.get('values', []):
-            workflow = self.inject_value_by_title(workflow, elem['title'], elem['key'], elem['key'])
+            workflow = self.inject_value_by_title(workflow, elem['title'], elem['key'], elem['value'])
+        return self.send_to_comfyui(workflow)
+
+    def send_to_comfyui(self, workflow, server_url=None, data={}):
+        if server_url is None:
+            server_url = self.server_url
         payload = {"prompt": workflow}
         response = requests.post(f"{server_url}/prompt", json=payload)
         response.raise_for_status()
@@ -445,9 +453,19 @@ class ComfyUi(r.BaseJobExecutor):
         j = self.queue()
         return self.success(value=len(j.get('queue_pending', [])))
 
+    def create_job_filename(self, guid):
+        path = self.cfg.get('jobpath', '.')
+        return os.path.join(path, guid + '.job.json')
+
+    def create_queued_job(self, data, guid=None):
+        if guid is None:
+            guid = u.guid()
+        with open(self.create_job_filename(guid), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_guid=guid)
+
     def execute_queue(self, data={}):
         data.pop('op')
-        path = self.cfg.get('jobpath', '.')
         guid = u.guid()
         data['guid'] = guid
         if 'count' not in data:
@@ -456,8 +474,7 @@ class ComfyUi(r.BaseJobExecutor):
             data['workflow'] = self.cfg.get('workflows', [''])[0]
         if 'file_title' in data and 'file_data' in data:
             data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
-        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
-            json.dump(data, f)
+        self.create_queued_job(data, guid)
         return self.success(job_id=guid)
 
     def execute(self, data):
@@ -475,8 +492,43 @@ class ComfyUi(r.BaseJobExecutor):
         p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
         p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
         p.ul([w.a("Prompt", self.link(self.part_prompt)),
+              w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4)),
+              w.a("Prepare Workflow", self.link(self.part_prepareworkflow)),
               w.a("Image Transform", self.link(self.part_image_transform))])
         p.pre('', id='result')
+
+    def execute_prepare_workflow(self, data={}):
+        data.pop('op')
+        path = self.cfg.get('jobpath', '.')
+        guid = u.guid()
+        data['guid'] = guid
+        if 'workflow' not in data:
+            data['workflow'] = self.cfg.get('workflows', [''])[0]
+        data['values'] = [{'title': data['title'], 'key': data['name'], 'value': data['prompt']}]
+        #if 'file_title' in data and 'file_data' in data:
+        #    data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
+        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_id=guid)
+
+    def part_prepareworkflow(self, p: base.Page, params={}):
+        p.h2("Prepare Workflow")
+        p.form_input('title', "Inject Title", value='Prompt', id='title', suggestions=[
+            'Positive Prompt'
+        ])
+        p.form_input('name', "Name", value='value', id='name')
+        p.form_elem('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow',
+                     suggestions=self.cfg.get('workflows', []))
+        p.form_elem(
+            self.action_btn_parametric("Queue", dict(
+                type=self.type,
+                op='prepare_workflow',
+                workflow='#workflow',
+                title='#title',
+                name='#name',
+                prompt='#prompt'
+            )))
 
     def part_workflow(self, p: base.Page, params={}):
         p.h2("Workflow")
@@ -486,7 +538,6 @@ class ComfyUi(r.BaseJobExecutor):
             p.div(f'{value.get("_meta", {}).get("title")} - {value.get("class_type")}')
             # LoadImage # TextEncodeQwenImageEditPlus # CLIPTextEncode
 
-
     def part_prompt(self, p: base.Page, params={}):
         p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
         p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
@@ -494,7 +545,53 @@ class ComfyUi(r.BaseJobExecutor):
         base_p = dict(prompt='#prompt', type=self.type, workflow='#workflow', count='#count')
         p(self.action_btn_parametric("Execute", base_p))
         p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}))
+        p(self.action_btn_parametric("MQueue", dict(
+            type='mongodb', op='insert_one', row_prompt='#prompt', row_type=self.type, row_workflow='#workflow',
+            db='nweb', collection='jobs', row_count='#count')))
+        p(self.action_btn_parametric("CMQueue", dict(
+            type='crypt', op='encrypt_job',
+            data_prompt='#prompt', data_type=self.type, data_workflow='#workflow', data_count='#count',
+            cjob_key='row_c', cjob=dict(type='mongodb', db='nweb', collection='jobs', op='insert_one', row_type='crypt')
+        )))
+        p(self.action_btn_parametric("T", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/zit.json', value_prompt='#prompt'
+        )))
+        p(self.action_btn_parametric("Klein9B", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/Klein9B.json', value_prompt='#prompt'
+        )))
+        p(self.action_btn_parametric("Krea2", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/Krea2.json', value_prompt='#prompt'
+        )))
         p.pre('', id='result')
+
+    def part_prompt_i4(self, p: base.Page, params={}):
+        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        #p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
+        p.input('count', value='10', id='count')
+        base_p = dict(prompt='#prompt', type=self.type, count='#count')
+        #p(self.action_btn_parametric("Execute", base_p))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue_i4'}))
+        p.pre('', id='result')
+
+    def execute_workflow(self, data):
+        r = self.send_to_comfyui(data['workflow'], data=data)
+        return self.success(result=r)
+
+    def execute_queue_i4(self, data):
+        api_workflow = '/mnt/d/ai/i4_api.json'
+        cprompt = u.load_json_file(api_workflow)
+        cprompt["98:24"]["inputs"]["text"] = data['prompt']
+        data.pop('op')
+        path = self.cfg.get('jobpath', '.')
+        guid = u.guid()
+        data['guid'] = guid
+        data['op'] = 'workflow'
+        data['workflow'] = cprompt
+        if 'count' not in data:
+            data['count'] = self.default_count
+        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_id=guid)
 
     def part_image_transform(self, p: base.Page, params={}):
         p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
@@ -524,6 +621,55 @@ class ComfyUi(r.BaseJobExecutor):
         p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
         p('<div id="dropZone" style="width:300px;height:200px;border:2px dashed #999; display:flex;align-items:center;justify-content:center;">Bild hier ablegen</div>')
         p.hidden('image_data', '', "image_data")
+
+
+    def run_apiworkflow(self, workflow: Path|str|dict, values: dict = {}, create_job_only=False):
+        if isinstance(workflow, Path) or isinstance(workflow, str):
+            workflow = u.load_json_file(workflow)
+        values[424242] = random.randint(0, sys.maxsize)
+        workflow = self.replace_value(workflow, values)
+        if create_job_only:
+            return self.create_queued_job(dict(
+                type=self.type,
+                op='workflow',
+                workflow=workflow
+            ))
+        else:
+            return self.execute_workflow(dict(workflow=workflow))
+
+    def execute_template(self, data={}):
+        path = data['path']
+        data.pop('type')
+        data.pop('op')
+        data.pop('path')
+        return self.run_apiworkflow(path, data, True)
+
+    @staticmethod
+    def replace_value(data: dict, replace_vals: dict) -> dict:
+        """
+        Recursively traverse `data` and replace any value found in
+        `replace_vals` with its corresponding replacement.
+        Example:
+            data = {
+                "a": 1,
+                "b": {"c": 2, "d": [1, 2, 3]}
+            }
+
+            replace_value(data, {1: "one", 2: "two"})
+            # {'a': 'one', 'b': {'c': 'two', 'd': ['one', 'two', 3]}}
+        """
+        def _replace(obj):
+            if isinstance(obj, Mapping):
+                return {k: _replace(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_replace(v) for v in obj]
+            elif isinstance(obj, tuple):
+                return tuple(_replace(v) for v in obj)
+            elif isinstance(obj, set):
+                return {_replace(v) for v in obj}
+            else:
+                return replace_vals.get(obj, obj)
+        return _replace(data)
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']

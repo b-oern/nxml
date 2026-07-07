@@ -38,6 +38,7 @@ if __name__ == '__main__':
                 'tw = nxml.nlp:TextWorker',
                 'od = nxml.image:ObjectDetector',
                 'ic = nxml.image:ImageClassifier',
+                'fingerprint = nxml.image:ImageFingerprint',
                 'aesthetics = nxml.image:Aesthetics',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',

@@ -691,3 +691,24 @@ class Aesthetics(r.ImageExecutor):
         prediction = outputs.logits
         self.info(f"Aesthetics score: {prediction}")
         return self.success(value=prediction.detach().numpy()[0][0])
+
+
+class ImageFingerprint(r.ImageExecutor):
+    """
+      https://pypi.org/project/ImageHash/
+
+      select MIN(d.document_id), MAX(d.document_id) from document d join document__meta m on d.document_id = m.document_id where m.name = 'fingerprint' group by m.value having count(m.name) > 1
+    """
+    MODULES = ['ImageHash']
+
+    def __init__(self):
+        super().__init__('fingerprint')
+
+    def executeImage(self, image, data):
+        try:
+            import imagehash
+            fingerprint = imagehash.average_hash(image)
+            return self.success(value=str(fingerprint))
+        except Exception as e:
+            print(e)
+            return self.fail(str(e))
