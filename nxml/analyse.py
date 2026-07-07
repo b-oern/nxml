@@ -132,12 +132,13 @@ class FlairRunner(runner.BaseJobExecutor):
 
 
 class BertEmbeddings(runner.BaseJobExecutor):
-    MODULES = ['transformers', 'langchain', 'sentence_transformers']
+    MODULES = ['transformers', 'langchain', 'sentence_transformers', 'langchain-huggingface']
     model = "all-MiniLM-L6-v2"
 
     def __init__(self):
         super().__init__()
-        from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
+        #from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
+        from langchain_huggingface import HuggingFaceEmbeddings
         self.embeddings = HuggingFaceEmbeddings(model_name=self.model)
 
     def execute(self, data):
