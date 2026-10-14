@@ -43,6 +43,7 @@ if __name__ == '__main__':
                 'depth = nxml.image:DepthEstimation',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
+                'jeff = nxml.nlp:Jeff',
                 'document = nxml.image:DocumentAnalysis',
                 'document_dockered = nxml.image:DocumentAnalysisDockerd',
                 'rllm = nxml.llm:RLLM',

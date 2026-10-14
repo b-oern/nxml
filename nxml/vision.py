@@ -13,6 +13,8 @@ import random
 import os.path
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Callable
+from enum import Enum
 import random
 import sys
 
@@ -220,6 +222,11 @@ class FaceSimilarity(r.ImageExecutor):
         p.input('b_id', id='b_id')
         p(self.action_btn_parametric("Compare", {'type':self.type, 'a_id': '#a_id', 'b_id': '#b_id'}))
         p.pre('', id='result')
+
+
+class Position(Enum):
+    PREFIX = "prefix"
+    POSTFIX = "postfix"
 
 
 class ComfyUi(r.BaseJobExecutor):
@@ -643,6 +650,52 @@ class ComfyUi(r.BaseJobExecutor):
         data.pop('op')
         data.pop('path')
         return self.run_apiworkflow(path, data, True)
+
+    @staticmethod
+    def extract_prompt(file):
+        im = Image.open(file)
+        im.load()  # Needed only for .png EXIF data (see citation above)
+        parameters = ''
+        message = ''
+        prompt = ''
+        try:
+            # params = json.loads(im.info)
+            # parameters = params['parameters']
+            if 'prompt' in im.info:
+                p = im.info['prompt']
+                data = json.loads(p)
+                return u.extract_longest_str(data)
+        except Exception as e:
+            print(e)
+            message = str(e)
+        return ""
+
+    @staticmethod
+    def rename_files(path: str | Path, extract_feature: Callable[[Path], str], position: Position) -> None:
+        """
+        Benennt alle Dateien im Verzeichnis um.
+        Args:
+            path: Verzeichnis mit den Dateien.
+            extract_feature: Callback, der für eine Datei ein Merkmal (String) liefert.
+            position: Einfügeposition des Merkmals (PREFIX oder POSTFIX| "prefix" or "postfix").
+        """
+        path = Path(path)
+        for file in path.iterdir():
+            if not file.is_file():
+                continue
+            feature = extract_feature(file)
+            if position == Position.PREFIX:
+                new_name = f"{feature}_{file.name}"
+            else:  # Position.POSTFIX
+                new_name = f"{file.stem}_{feature}{file.suffix}"
+            file.rename(file.with_name(new_name))
+
+    @staticmethod
+    def rename_with_promptid(path: str | Path):
+        def mapfn(filename):
+            prompt = ComfyUi.extract_prompt(filename)
+            return "p_" + u.hash_text(prompt)
+        ComfyUi.rename_files(path, mapfn, Position.PREFIX)
 
     @staticmethod
     def replace_value(data: dict, replace_vals: dict) -> dict:

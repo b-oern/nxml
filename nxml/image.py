@@ -252,7 +252,6 @@ class ImageSimilarity(r.ImageExecutor):
     MODULES = ['opencv-python', 'scikit-image']
     TAGS = [TAG.IMAGE, '2-images']
     NS = 'image_similarity'
-    type = 'image_similarity'
 
     comparators = {
         'clip': 'compareImagesCLIP',
@@ -261,8 +260,8 @@ class ImageSimilarity(r.ImageExecutor):
 
     threshold = 0.9
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, args={}):
+        super().__init__('image_similarity')
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
@@ -397,7 +396,6 @@ class ImageSimilarity(r.ImageExecutor):
         else:
             return super().execute(data)
 
-
     def executeImage(self, image, data):
         b = self.get_image('b', data)
         if b is not None:
@@ -427,7 +425,6 @@ class ObjectDetector(r.ImageExecutor):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(self.model_id)
         self.model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device)
-
 
     def executeImage(self, image, data):
         import torch
@@ -671,28 +668,45 @@ class Aesthetics(r.ImageExecutor):
 
     model = "shunk031/aesthetics-predictor-v1-vit-large-patch14"
     
-    def __init__(self):
+    def __init__(self, device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__('aesthetics')
+        self.device = self.select_device(device_mode)
         self.load()
+
+    @staticmethod
+    def select_device(device_mode):
+        import torch
+        if device_mode not in ('cpu', 'gpu', 'auto'):
+            raise ValueError(f'device_mode must be "cpu", "gpu" or "auto", got {device_mode!r}')
+        if device_mode == 'cpu':
+            return 'cpu'
+        if torch.cuda.is_available():
+            return 'cuda'
+        if torch.backends.mps.is_available():
+            return 'mps'
+        if device_mode == 'gpu':
+            raise RuntimeError('device_mode="gpu", but no CUDA or MPS device is available')
+        return 'cpu'
 
     def load(self):
         from transformers import CLIPProcessor
         from aesthetics_predictor import AestheticsPredictorV1
-        self.predictor = AestheticsPredictorV1.from_pretrained(self.model)
-        self.processor = CLIPProcessor.from_pretrained(self.model)
-
+        self.predictor = AestheticsPredictorV1.from_pretrained(self.model).to(self.device).eval()
+        # Standard-CLIPProcessor, ohne trust_remote_code fragt transformers interaktiv nach (blockiert im Server)
+        self.processor = CLIPProcessor.from_pretrained(self.model, trust_remote_code=False)
 
     def executeImage(self, image, data):
         import torch
         inputs = self.processor(images=image, return_tensors="pt")
-        # device = "cuda"
-        # predictor = predictor.to(device)
-        # inputs = {k: v.to(device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():  # or `torch.inference_model` in torch 1.9+
             outputs = self.predictor(**inputs)
         prediction = outputs.logits
         self.info(f"Aesthetics score: {prediction}")
-        return self.success(value=prediction.detach().numpy()[0][0])
+        return self.success(value=float(prediction[0][0]))
 
 
 class ImageFingerprint(r.ImageExecutor):
