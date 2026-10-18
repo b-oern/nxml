@@ -305,6 +305,15 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def execute_q_c_prompt(self, data):
+        self.info("q_c_promt("+str(data.keys())+")")
+        self.create_queued_job(dict(
+            type=self.type,
+            op='workflow',
+            workflow=data['payload']
+        ))
+        return self.success()
+
     def inject_prompt(self, prompt, workflow):
         for k in workflow.keys():
             if (workflow[k].get('class_type', '') == 'CLIPTextEncode' and
