@@ -59,7 +59,7 @@ class CommandRecognition(r.BaseJobExecutor):
 
     pip install git+https://github.com/huggingface/transformers
     """
-    MODULES = ['datasets, soundfile, librosa']
+    MODULES = ['datasets', 'soundfile', 'librosa', 'transformers']
 
     type = 'speech_reg'
 
@@ -165,7 +165,7 @@ class PiperTTS(r.BaseJobExecutor):
 
     /home/pi/tts/piper
     """
-    MODULES = ['piper-tts']
+    MODULES = ['piper-tts', 'Flask']
     CFGS = ['pipertts']
 
     models = {

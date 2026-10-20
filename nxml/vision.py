@@ -200,6 +200,8 @@ def get_face_class(img1):
 
 class FaceSimilarity(r.ImageExecutor):
 
+    MODULES = ['opencv-python', 'torch', 'torchvision', 'joblib', 'scikit-learn']
+
     TAGS = [TAG.IMAGE, '2-images']
 
     type = 'face_similarity'
@@ -239,6 +241,8 @@ class ComfyUi(r.BaseJobExecutor):
         comfyui_path: /mnt/l/ComfyUI_windows_portable/ComfyUI
 
     """
+
+    MODULES = ['opencv-python', 'torch', 'torchvision']
     def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
         if args is None:

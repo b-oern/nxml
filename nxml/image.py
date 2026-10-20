@@ -249,7 +249,7 @@ class ImageSimilarity(r.ImageExecutor):
       via https://medium.com/scrapehero/exploring-image-similarity-approaches-in-python-b8ca0a3ed5a3
     """
 
-    MODULES = ['opencv-python', 'scikit-image']
+    MODULES = ['opencv-python', 'scikit-image', 'open_clip_torch', 'scipy', 'sentence-transformers', 'torch']
     TAGS = [TAG.IMAGE, '2-images']
     NS = 'image_similarity'
 
@@ -413,6 +413,8 @@ class ObjectDetector(r.ImageExecutor):
 
     https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
     """
+
+    MODULES = ['scipy', 'torch', 'transformers']
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     type = 'od'
 
@@ -462,7 +464,7 @@ class ImageClassifier(r.ImageExecutor):
     """
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
 
-    MODULES = ['clip_interrogator']
+    MODULES = ['clip_interrogator', 'scipy']
 
     type = 'ic'
 
@@ -503,7 +505,7 @@ class DocumentAnalysis(r.ImageExecutor):
       Läuft aktuell nur auf x86
 
     """
-    MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
+    MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python', 'scipy', 'ultralytics']
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     # pycocotools==2.0.7
     # PyYAML==6.0.1
@@ -632,6 +634,8 @@ class DocumentAnalysis(r.ImageExecutor):
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
+    MODULES = ['scipy', 'setuptools']
+
     TAGS = [TAG.IMAGE]
 
     def __init__(self, build=True):
@@ -664,7 +668,7 @@ class Aesthetics(r.ImageExecutor):
     """
     TAGS = [TAG.IMAGE]
 
-    MODULES = ['simple-aesthetics-predictor']
+    MODULES = ['simple-aesthetics-predictor', 'scipy', 'torch', 'transformers']
 
     model = "shunk031/aesthetics-predictor-v1-vit-large-patch14"
     
@@ -715,7 +719,7 @@ class ImageFingerprint(r.ImageExecutor):
 
       select MIN(d.document_id), MAX(d.document_id) from document d join document__meta m on d.document_id = m.document_id where m.name = 'fingerprint' group by m.value having count(m.name) > 1
     """
-    MODULES = ['ImageHash']
+    MODULES = ['ImageHash', 'scipy']
 
     def __init__(self):
         super().__init__('fingerprint')
@@ -734,6 +738,8 @@ class DepthEstimation(r.ImageExecutor):
     """
     https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
     """
+
+    MODULES = ['scipy', 'transformers']
     def __init__(self, type='depth'):
         super().__init__(type)
         from transformers import pipeline

@@ -131,6 +131,8 @@ class Event(object):
 
 
 class LlmProxy(r.BaseJobExecutor):
+    MODULES = ['Flask']
+
     def __init__(self, url='https://api.openai.com/v1/'):
         super().__init__('llmproxy')
         self.url = url

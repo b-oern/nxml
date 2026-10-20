@@ -139,6 +139,8 @@ class TextToText(TextExecutor):
     ramsrigouthamg/t5-large-paraphraser-diverse-high-quality
     """
 
+    MODULES = ['beautifulsoup4', 'transformers']
+
     DE_GRAMMAR = "MRNH/mbart-german-grammar-corrector"
     DE_PARAPHRASE = "Lelon/t5-german-paraphraser-large"
 
@@ -171,6 +173,8 @@ class TextToText(TextExecutor):
 
 
 class QuestionAnswering(r.BaseJobExecutor):
+
+    MODULES = ['transformers']
 
     type = 'qa'
 
@@ -212,6 +216,8 @@ class TextClassifier(r.BaseJobExecutor):
 
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
+
+    MODULES = ['transformers']
     TAGS = [r.TAG.TEXT_EXTRACTOR]
 
     def __init__(self, type='classify', classes=None, model="facebook/bart-large-mnli"):
@@ -698,6 +704,8 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
 
 class TextWorker(TextExecutor):
 
+    MODULES = ['beautifulsoup4']
+
     sentence_runner = {}
 
     def __init__(self, sentence_runner={}):
@@ -751,6 +759,8 @@ class TextSummarization(TextExecutor):
     """
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
+
+    MODULES = ['beautifulsoup4', 'transformers']
     TAGS = [r.TAG.TEXT_TRANSFORM]
 
     type = "summarize"

@@ -187,6 +187,8 @@ class NsfwDetector(runner.ImageExecutor):
 
 
 class AgeAndGenderRunner(runner.ImageExecutor):
+    MODULES = ['age-and-gender']
+
     def __init__(self, args: util.Args = {}):
         super().__init__()
         from age_and_gender import AgeAndGender
@@ -213,7 +215,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
       Erstellt Embeddings für Texte oder Bild
 
     """
-    MODULES = ['transformers', 'pillow']
+    MODULES = ['transformers', 'pillow', 'torch']
     model_id = 'openai/clip-vit-base-patch16'
     text_key = 'text'
     image_key = 'image'
