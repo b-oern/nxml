@@ -18,6 +18,7 @@ from nwebclient import NWebClient
 from nwebclient import NWebDoc
 from nwebclient import util as u
 from nwebclient import base as b
+from nwebclient import dev as d
 
 from nxml import analyse
 from nxml.system import select_device
@@ -251,7 +252,7 @@ class ImageSimilarity(r.ImageExecutor):
     """
 
     MODULES = ['opencv-python', 'scikit-image', 'open_clip_torch', 'scipy', 'torch']
-    TAGS = [TAG.IMAGE, '2-images']
+    TAGS = ['image', '2-images']
     NS = 'image_similarity'
 
     comparators = {
@@ -271,6 +272,14 @@ class ImageSimilarity(r.ImageExecutor):
         super().__init__('image_similarity')
         self.device_mode = device_mode
         self.device = None
+        # Bilder: Base64, Pfad oder nweb-ID (image_id / b_id)
+        self.define_sig(d.Param('image', is_pos=False), d.Param('b', is_pos=False), d.PStr('algo', 'ssim'))\
+            .r(success='bool', score='float', algo='str')
+        self.define_sig(d.Param('image', is_pos=False), d.Param('search', is_pos=False))\
+            .r(images='list', nweb='str', image_count='int')
+        self.define_sig(d.NP('index', 'str', '1'), d.PInt('limit', 10), d.PStr('q', ''))\
+            .r(**{'from': 'str'})
+        self.define_sig(d.NP('index_async', 'str', '1')).r()
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
