@@ -10,6 +10,9 @@ from nwebclient import dev as d
 
 
 class LibRosa(r.BaseJobExecutor):
+    """
+    Analysiert Audiodateien mit librosa, z.B. Tempo und Mel-Spektrogramm.
+    """
     MODULES = ['librosa']
     type = 'librosa'
 
@@ -143,6 +146,9 @@ class AudioGenerator(r.BaseJobExecutor):
 
 
 class FFmpeg(r.BaseJobExecutor):
+    """
+    Liest mit ffmpeg Informationen über Mediendateien aus, aktuell die Dauer.
+    """
     MODULES = ['ffmpeg-python']
     
     def __init__(self):

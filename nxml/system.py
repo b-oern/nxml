@@ -14,6 +14,25 @@ def format_bytes(n):
         n /= 1024
 
 
+def select_device(device_mode='auto'):
+    """
+        :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        :return: torch-Device "cpu", "cuda" oder "mps"
+    """
+    import torch
+    if device_mode not in ('cpu', 'gpu', 'auto'):
+        raise ValueError(f'device_mode must be "cpu", "gpu" or "auto", got {device_mode!r}')
+    if device_mode == 'cpu':
+        return 'cpu'
+    if torch.cuda.is_available():
+        return 'cuda'
+    if torch.backends.mps.is_available():
+        return 'mps'
+    if device_mode == 'gpu':
+        raise RuntimeError('device_mode="gpu", but no CUDA or MPS device is available')
+    return 'cpu'
+
+
 class AISystemInfo:
     """
     Mixin für Runner, die KI-Modelle laden: zeigt RAM, CPU, GPU und GPU-RAM.

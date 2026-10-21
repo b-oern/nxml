@@ -199,6 +199,9 @@ def get_face_class(img1):
 
 
 class FaceSimilarity(r.ImageExecutor):
+    """
+    Vergleicht zwei Gesichtsbilder mit einem siamesischen Netz und liefert ihre Distanz.
+    """
 
     MODULES = ['opencv-python', 'torch', 'torchvision', 'joblib', 'scikit-learn']
 

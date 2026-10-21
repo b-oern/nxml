@@ -20,6 +20,7 @@ from nwebclient import util as u
 from nwebclient import base as b
 
 from nxml import analyse
+from nxml.system import select_device
 
 
 class DatasetWriter:
@@ -249,7 +250,7 @@ class ImageSimilarity(r.ImageExecutor):
       via https://medium.com/scrapehero/exploring-image-similarity-approaches-in-python-b8ca0a3ed5a3
     """
 
-    MODULES = ['opencv-python', 'scikit-image', 'open_clip_torch', 'scipy', 'sentence-transformers', 'torch']
+    MODULES = ['opencv-python', 'scikit-image', 'open_clip_torch', 'scipy', 'torch']
     TAGS = [TAG.IMAGE, '2-images']
     NS = 'image_similarity'
 
@@ -260,8 +261,16 @@ class ImageSimilarity(r.ImageExecutor):
 
     threshold = 0.9
 
-    def __init__(self, args={}):
+    clip_model = None
+    clip_preprocess = None
+
+    def __init__(self, args={}, device_mode='auto'):
+        """
+            :param device_mode: Gerät für CLIP: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__('image_similarity')
+        self.device_mode = device_mode
+        self.device = None
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
@@ -271,8 +280,8 @@ class ImageSimilarity(r.ImageExecutor):
             # Load images
             #image1 = cv2.imread(image_a)
             #image2 = cv2.imread(image_b)
-            image1 = cv2.cvtColor(numpy.array(image_a), cv2.COLOR_RGB2BGR)
-            image2 = cv2.cvtColor(numpy.array(image_b), cv2.COLOR_RGB2BGR)
+            image1 = cv2.cvtColor(numpy.array(image_a.convert('RGB')), cv2.COLOR_RGB2BGR)
+            image2 = cv2.cvtColor(numpy.array(image_b.convert('RGB')), cv2.COLOR_RGB2BGR)
             image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]), interpolation=cv2.INTER_AREA)
             # print(image1.shape, image2.shape)
             # Convert images to grayscale
@@ -281,39 +290,33 @@ class ImageSimilarity(r.ImageExecutor):
             # Calculate SSIM
             ssim_score = metrics.structural_similarity(image1_gray, image2_gray, full=True)
             #print(f"SSIM Score: ", round(ssim_score[0], 2))
-            return round(ssim_score[0], 2)
+            return round(float(ssim_score[0]), 2)
         except Exception as e:
             self.error(str(e))
             return 0
 
     def compareImagesCLIP(self, image_a, image_b):
-        # !pip install git+https://github.com/openai/CLIP.git
         # !pip install open_clip_torch
-        # !pip install sentence_transformers
         import torch
-        import open_clip
-        import cv2
-        from sentence_transformers import util
-        from PIL import Image
-        # image processing model
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-16-plus-240', pretrained="laion400m_e32")
-        model.to(device)
+        model, preprocess = self.load_clip()
 
         def imageEncoder(img):
-            img1 = preprocess(img).unsqueeze(0).to(device)
-            img1 = model.encode_image(img1)
-            return img1
+            img1 = preprocess(img.convert('RGB')).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                return model.encode_image(img1)
 
-        def generateScore(image1, image2):
-            img1 = imageEncoder(image1)
-            img2 = imageEncoder(image2)
-            cos_scores = util.pytorch_cos_sim(img1, img2)
-            score = round(float(cos_scores[0][0]) * 100, 2)
-            return score
+        cos = torch.nn.functional.cosine_similarity(imageEncoder(image_a), imageEncoder(image_b))
+        return round(float(cos[0]), 4)
 
-        #print(f"similarity Score: ", round(generateScore(image_a, image_b), 2))
-        return round(generateScore(image_a, image_b), 2)/100
+    def load_clip(self):
+        """ CLIP-Modell einmalig laden, nicht bei jedem Vergleich """
+        if self.clip_model is None:
+            import open_clip
+            self.device = select_device(self.device_mode)
+            model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-16-plus-240', pretrained="laion400m_e32")
+            self.clip_model = model.to(self.device).eval()
+            self.clip_preprocess = preprocess
+        return self.clip_model, self.clip_preprocess
 
     def compareImages(self, image_a, image_b, algo='clip'):
         method = getattr(self, self.comparators[algo])
@@ -396,11 +399,32 @@ class ImageSimilarity(r.ImageExecutor):
         else:
             return super().execute(data)
 
+    def ui_imageform(self, p: b.Page):
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+            p.js_ready('nx_initFileDragArea("dropZoneB", "b_data");')
+            p.dropzone('dropZone', "Bild A hier ablegen")
+            p.hidden('image_data', '', "image_data")
+            p.dropzone('dropZoneB', "Bild B hier ablegen")
+            p.hidden('b_data', '', "b_data")
+            p.form_select('algo', "Algorithmus", {'ssim': "SSIM (Struktur)", 'clip': "CLIP (Inhalt)"},
+                          value='ssim', id='algo')
+            p.form_elem(self.action_btn_parametric("Vergleichen", dict(
+                type=self.type,
+                image='#image_data',
+                b='#b_data',
+                algo='#algo'
+            )))
+        p.pre('', id='result')
+
     def executeImage(self, image, data):
         b = self.get_image('b', data)
         if b is not None:
-            score = self.compareImagesSSIM(image, b)
-            return {'success': True, 'score': score}
+            algo = data.get('algo') or 'ssim'
+            if algo not in self.comparators:
+                return self.fail(f'Unknown algo {algo!r}, use one of {list(self.comparators)}')
+            score = self.compareImages(image, b, algo)
+            return {'success': True, 'score': score, 'algo': algo}
         if 'search' in data:
             return self.searchSimilar(image, data)
         else:
@@ -634,6 +658,9 @@ class DocumentAnalysis(r.ImageExecutor):
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
+    """
+    Baut und startet die Dokumentanalyse als Docker-Container und leitet Jobs per HTTP an ihn weiter.
+    """
     MODULES = ['scipy', 'setuptools']
 
     TAGS = [TAG.IMAGE]
@@ -677,23 +704,8 @@ class Aesthetics(r.ImageExecutor):
             :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
         """
         super().__init__('aesthetics')
-        self.device = self.select_device(device_mode)
+        self.device = select_device(device_mode)
         self.load()
-
-    @staticmethod
-    def select_device(device_mode):
-        import torch
-        if device_mode not in ('cpu', 'gpu', 'auto'):
-            raise ValueError(f'device_mode must be "cpu", "gpu" or "auto", got {device_mode!r}')
-        if device_mode == 'cpu':
-            return 'cpu'
-        if torch.cuda.is_available():
-            return 'cuda'
-        if torch.backends.mps.is_available():
-            return 'mps'
-        if device_mode == 'gpu':
-            raise RuntimeError('device_mode="gpu", but no CUDA or MPS device is available')
-        return 'cpu'
 
     def load(self):
         from transformers import CLIPProcessor
@@ -730,7 +742,7 @@ class ImageFingerprint(r.ImageExecutor):
             fingerprint = imagehash.average_hash(image)
             return self.success(value=str(fingerprint))
         except Exception as e:
-            print(e)
+            self.info(e)
             return self.fail(str(e))
 
 

@@ -10,7 +10,7 @@ from nwebclient import web as w
 from nwebclient import util as u
 from nwebclient.nlp import ParagraphParser
 
-from nxml.system import AISystemInfo
+from nxml.system import AISystemInfo, select_device
 
 
 def text_input_form(runner, p: b.Page, text='', caption="Execute",
@@ -134,12 +134,37 @@ class TextExecutor(r.BaseJobExecutor):
         return p.nxui()
 
 
+class Seq2SeqGenerator:
+    """
+    Ersatz für die in transformers 5 entfernten Pipelines text2text-generation und summarization.
+    """
+
+    def __init__(self, model, task=None, device_mode='auto'):
+        """
+            :param task: z.B. "summarization", übernimmt dann task_specific_params aus der Modell-Config
+        """
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        self.device = select_device(device_mode)
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(model).to(self.device).eval()
+        params = dict((getattr(self.model.config, 'task_specific_params', None) or {}).get(task, {}))
+        self.prefix = params.pop('prefix', None) or getattr(self.model.config, 'prefix', None) or ''
+        self.generate_kwargs = params
+
+    def __call__(self, text) -> str:
+        import torch
+        enc = self.tokenizer(self.prefix + text, return_tensors='pt', truncation=True).to(self.device)
+        with torch.no_grad():
+            out = self.model.generate(**enc, **self.generate_kwargs)
+        return self.tokenizer.decode(out[0], skip_special_tokens=True, clean_up_tokenization_spaces=True).strip()
+
+
 class TextToText(TextExecutor):
     """
     ramsrigouthamg/t5-large-paraphraser-diverse-high-quality
     """
 
-    MODULES = ['beautifulsoup4', 'transformers']
+    MODULES = ['beautifulsoup4', 'transformers', 'torch', 'sentencepiece']
 
     DE_GRAMMAR = "MRNH/mbart-german-grammar-corrector"
     DE_PARAPHRASE = "Lelon/t5-german-paraphraser-large"
@@ -147,16 +172,18 @@ class TextToText(TextExecutor):
     type = 'ttt'
     model_name = ''
     title = 'Text2Text'
-    def __init__(self, model="Lelon/t5-german-paraphraser-large"):
+    def __init__(self, model="Lelon/t5-german-paraphraser-large", device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__()
-        from transformers import pipeline
         self.param_names['text'] = "Texteingabe"
         self.model_name = model
-        self.pipe = pipeline("text2text-generation", model="Lelon/t5-german-paraphraser-large")
+        self.pipe = Seq2SeqGenerator(model, device_mode=device_mode)
 
     def generate(self, text):
-        # pipe liefert [{'generated_text': 'Ich kann heute nicht pünktlich sein.'}]
-        return self.pipe(text)[0]
+        # liefert {'generated_text': 'Ich kann heute nicht pünktlich sein.'} wie die frühere Pipeline
+        return {'generated_text': self.pipe(text)}
 
     def execute_text(self, text, data):
         return self.generate(text)
@@ -173,27 +200,65 @@ class TextToText(TextExecutor):
 
 
 class QuestionAnswering(r.BaseJobExecutor):
+    """
+    Beantwortet Fragen zu einem Kontexttext mit einem deutschen extraktiven QA-Modell (GELECTRA).
+    """
 
-    MODULES = ['transformers']
+    MODULES = ['transformers', 'torch']
 
     type = 'qa'
 
-    pipe = None
+    # wie die frühere question-answering-Pipeline (in transformers 5 entfernt)
+    max_length = 384
+    doc_stride = 128
+    max_answer_len = 15
 
-    def __init__(self, model="deepset/gelectra-base-germanquad", context=''):
+    def __init__(self, model="deepset/gelectra-base-germanquad", context='', device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__()
-        from transformers import pipeline
-        self.pipe = pipeline("question-answering", model=model)
+        from transformers import AutoModelForQuestionAnswering, AutoTokenizer
+        self.device = select_device(device_mode)
+        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        self.model = AutoModelForQuestionAnswering.from_pretrained(model).to(self.device).eval()
         self.context = context
         self.define_vars('context')
 
     def answer(self, question, context):
-        return self.pipe(question=question, context=question)
+        """
+            Extraktive QA, lange Kontexte werden in überlappenden Fenstern verarbeitet.
+            :return: {'score': float, 'start': int, 'end': int, 'answer': str}
+        """
+        import torch
+        enc = self.tokenizer(question, context, return_tensors='pt', truncation='only_second',
+                             max_length=self.max_length, stride=self.doc_stride,
+                             return_overflowing_tokens=True, return_offsets_mapping=True, padding=True)
+        sequence_ids = [enc.sequence_ids(i) for i in range(len(enc['input_ids']))]
+        offsets = enc.pop('offset_mapping')
+        enc.pop('overflow_to_sample_mapping', None)
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        with torch.no_grad():
+            out = self.model(**enc)
+        best = {'score': 0.0, 'start': 0, 'end': 0, 'answer': ''}
+        for i in range(len(offsets)):
+            # nur Tokens aus dem Kontext dürfen Teil der Antwort sein
+            is_context = torch.tensor([s == 1 for s in sequence_ids[i]], device=self.device)
+            start = out.start_logits[i].float().masked_fill(~is_context, -1e9).softmax(-1)
+            end = out.end_logits[i].float().masked_fill(~is_context, -1e9).softmax(-1)
+            scores = torch.triu(start[:, None] * end[None, :]).tril(self.max_answer_len - 1)
+            idx = int(scores.argmax())
+            si, ei = divmod(idx, scores.shape[1])
+            score = float(scores[si, ei])
+            if score > best['score']:
+                s, e = int(offsets[i][si][0]), int(offsets[i][ei][1])
+                best = {'score': score, 'start': s, 'end': e, 'answer': context[s:e]}
+        return best
 
     def execute(self, data):
         if 'question' in data:
             # {'score': 0.2509937584400177, 'start': 19, 'end': 63, 'answer': 'Kann ich am 13.2 an einer Führung teilnhmen?'}
-            return self.answer(data['question'], data.get('context', ''))
+            return self.answer(data['question'], data.get('context') or self.context)
         return super().execute(data)
 
     def page_index(self, params={}):
@@ -703,6 +768,9 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
 
 
 class TextWorker(TextExecutor):
+    """
+    Zerlegt Text in Absätze und verarbeitet jeden mit konfigurierbaren Satz-Runnern (z.B. Grammatik, Paraphrase).
+    """
 
     MODULES = ['beautifulsoup4']
 
@@ -760,17 +828,19 @@ class TextSummarization(TextExecutor):
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
 
-    MODULES = ['beautifulsoup4', 'transformers']
+    MODULES = ['beautifulsoup4', 'transformers', 'torch']
     TAGS = [r.TAG.TEXT_TRANSFORM]
 
     type = "summarize"
 
-    def __init__(self, model="sshleifer/distilbart-cnn-12-6"):
+    def __init__(self, model="sshleifer/distilbart-cnn-12-6", device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__()
-        from transformers import pipeline
         self.param_names['text'] = "Text der zusammengefasst werden soll"
         self.model = model
-        self.pipe = pipeline("summarization", model=self.model)
+        self.pipe = Seq2SeqGenerator(self.model, task='summarization', device_mode=device_mode)
 
     def summerize(self, text) -> dict:
         """
@@ -778,9 +848,8 @@ class TextSummarization(TextExecutor):
         :param text:
         :return: object
         """
-        res = self.pipe(text)[0]
-        res['value'] = res['summary_text']
-        return res
+        summary = self.pipe(text)
+        return {'summary_text': summary, 'value': summary}
 
     def execute_text(self, text, data={}):
         return self.summerize(text)
@@ -802,6 +871,9 @@ class TextSummarization(TextExecutor):
 
 
 class MailRespond(r.BaseJobExecutor):
+    """
+    Erstellt mit LLM, Klassifikator und Question Answering Antwortvorschläge auf E-Mails.
+    """
 
     MODULES = ['extract-msg', 'imapclient']
 

@@ -6,6 +6,9 @@ from nwebclient import util as u
 import imaplib
 
 class Imap(r.BaseJobExecutor):
+    """
+    Liest die Mails eines IMAP-Postfachs und zeigt sie an.
+    """
     def __init__(self, host, user, password, type='imap', args: u.Args={}):
         super().__init__(type)
         self.host = host

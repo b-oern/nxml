@@ -38,6 +38,9 @@ class Whisper(runner.BaseJobExecutor):
 
 
 class Toxity(runner.BaseJobExecutor):
+    """
+    Bewertet Texte mit Detoxify (multilingual) auf Toxizität, Beleidigungen, Drohungen und ähnliches.
+    """
     MODULES = ['detoxify']
     text_key = 'text'
 
@@ -58,6 +61,9 @@ class Toxity(runner.BaseJobExecutor):
 
 
 class Nltk(runner.BaseJobExecutor):
+    """
+    Erkennt die Sprache eines Textes und zerlegt ihn mit NLTK in Wörter.
+    """
     MODULES = ['nltk']
 
     def __init__(self):
@@ -86,6 +92,9 @@ class Nltk(runner.BaseJobExecutor):
 
 
 class FlairRunner(runner.BaseJobExecutor):
+    """
+    Erkennt Named Entities (Personen, Orte, Organisationen, ...) in Texten mit einem Flair-NER-Modell.
+    """
 
     MODULES = ['flair']
 
@@ -132,6 +141,9 @@ class FlairRunner(runner.BaseJobExecutor):
 
 
 class BertEmbeddings(runner.BaseJobExecutor):
+    """
+    Berechnet Text-Embeddings mit dem Sentence-Transformer all-MiniLM-L6-v2.
+    """
     MODULES = ['transformers', 'langchain', 'sentence_transformers', 'langchain-huggingface']
     model = "all-MiniLM-L6-v2"
 
@@ -187,6 +199,9 @@ class NsfwDetector(runner.ImageExecutor):
 
 
 class AgeAndGenderRunner(runner.ImageExecutor):
+    """
+    Schätzt Alter und Geschlecht der Gesichter in einem Bild mit age-and-gender.
+    """
     MODULES = ['age-and-gender']
 
     def __init__(self, args: util.Args = {}):
@@ -270,6 +285,9 @@ class ClipEmbeddings(runner.BaseJobExecutor):
 
 
 class TextBlobRunner(runner.BaseJobExecutor):
+    """
+    Bestimmt Sentiment (Polarität, Subjektivität) und Sätze eines deutschen oder englischen Textes mit TextBlob.
+    """
     MODULES = ['textblob', 'textblob_de']
     type = 'textblob'
     text_key = 'text'
@@ -321,11 +339,17 @@ class TextBlobRunner(runner.BaseJobExecutor):
 
 
 class NlpPipeline(runner.Pipeline):
+    """
+    Führt Flair-NER, NLTK-Tokenisierung und TextBlob-Sentiment nacheinander auf einem Text aus.
+    """
     def __init__(self):
         super().__init__(FlairRunner(), Nltk(), TextBlobRunner())
 
 
 class AnalyseMain(runner.AutoDispatcher):
+    """
+    Leitet Jobs anhand von type an NLP-Pipeline, CLIP-/BERT-Embeddings oder Alters- und Geschlechtserkennung weiter.
+    """
     def __init__(self):
         super().__init__('type',
                          **self.create('nlp', NlpPipeline),
