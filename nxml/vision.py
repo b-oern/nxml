@@ -163,11 +163,11 @@ def get_similarity(img1, img2):
     ##########################################################################################
     ##########################################################################################
 
-    feature_net = Siamese()
+    feature_net = Siamese().to(device)
     ckpt = torch.load(current_path + '/siamese_model.t7', map_location=device)
     # model_path = current_path + "/Hackathon-setup/siamese_model.t7"
     feature_net.load_state_dict(ckpt['net_dict'])
-    # model.eval()
+    feature_net.eval()
 
     with torch.no_grad():
         output1, output2 = feature_net(face1.to(device), face2.to(device))
@@ -214,18 +214,40 @@ class FaceSimilarity(r.ImageExecutor):
         u.download_resources('./', RESSOURCES)
 
     def to_numpy(self, img):
+        # convert: PNGs mit Transparenz oder Graustufen haben nicht 3 Kanäle
+        img = img.convert('RGB')
         return np.array(img).reshape(img.size[1], img.size[0], 3).astype(np.uint8)
 
     def execute(self, data):
-        a = self.to_numpy(self.get_image('a', data))
-        b = self.to_numpy(self.get_image('b', data))
-        dist = get_similarity(a, b)
+        if 'page' in data:
+            return super().execute(data)
+        img_a = self.get_image('a', data)
+        img_b = self.get_image('b', data)
+        if img_a is None or img_b is None:
+            return self.fail('Two images required: a and b (Base64, path, URL or nweb-ID via a_id/b_id)')
+        dist = get_similarity(self.to_numpy(img_a), self.to_numpy(img_b))
         return self.success('ok', distance=dist, value=dist)
 
+    def ui_imageform(self, p: base.Page):
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "a_data");')
+            p.js_ready('nx_initFileDragArea("dropZoneB", "b_data");')
+            p.dropzone('dropZone', "Gesicht A hier ablegen")
+            p.hidden('a_data', '', "a_data")
+            p.dropzone('dropZoneB', "Gesicht B hier ablegen")
+            p.hidden('b_data', '', "b_data")
+            p.form_elem(self.action_btn_parametric("Vergleichen", dict(
+                type=self.type,
+                a='#a_data',
+                b='#b_data'
+            )))
+
     def part_index(self, p: base.Page, params={}):
-        p.input('a_id', id='a_id')
-        p.input('b_id', id='b_id')
-        p(self.action_btn_parametric("Compare", {'type':self.type, 'a_id': '#a_id', 'b_id': '#b_id'}))
+        with p.section(h="nweb-IDs"):
+            p.input('a_id', id='a_id')
+            p.input('b_id', id='b_id')
+            p(self.action_btn_parametric("Compare", {'type':self.type, 'a_id': '#a_id', 'b_id': '#b_id'}))
+        self.ui_imageform(p)
         p.pre('', id='result')
 
 

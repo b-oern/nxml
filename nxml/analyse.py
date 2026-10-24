@@ -204,21 +204,40 @@ class AgeAndGenderRunner(runner.ImageExecutor):
     """
     MODULES = ['age-and-gender']
 
+    MODELS_URL = 'https://raw.githubusercontent.com/b-oern/age-and-gender/master/example/models/'
+
     def __init__(self, args: util.Args = {}):
-        super().__init__()
+        super().__init__('age')
         from age_and_gender import AgeAndGender
         # apt install -y wget git curl python3 libjpeg-dev libpng-dev python3-dev python3-pip cmake gcc libx11-dev
-        # os.system('git clone https://github.com/b-oern/age-and-gender.git')
         self.data = AgeAndGender()
         predictor_file = args.get('age_and_gender_predictor',
                                   './age-and-gender/example/models/shape_predictor_5_face_landmarks.dat')
         classifier_file = args.get('age_and_gender_classifier',
                                    './age-and-gender/example/models/dnn_gender_classifier_v1.dat')
         dnn_file = args.get('age_and_gender_dnn', './age-and-gender/example/models/dnn_age_predictor_v1.dat')
-        if os.path.isfile(predictor_file):
-            self.data.load_shape_predictor(predictor_file)
-            self.data.load_dnn_gender_classifier(classifier_file)
-            self.data.load_dnn_age_predictor(dnn_file)
+        self.insure_files_exists({
+            predictor_file: 'shape_predictor_5_face_landmarks.dat',
+            classifier_file: 'dnn_gender_classifier_v1.dat',
+            dnn_file: 'dnn_age_predictor_v1.dat'
+        })
+        self.data.load_shape_predictor(predictor_file)
+        self.data.load_dnn_gender_classifier(classifier_file)
+        self.data.load_dnn_age_predictor(dnn_file)
+
+    def insure_files_exists(self, files: dict):
+        """
+            Lädt fehlende Modelldateien aus https://github.com/b-oern/age-and-gender (example/models) herunter.
+            :param files: {lokaler Pfad: Dateiname im Repo}
+        """
+        for path, name in files.items():
+            if os.path.isfile(path):
+                continue
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            self.info(f"Downloading {name} -> {path}")
+            util.download(self.MODELS_URL + name, path)
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"Model file {path} missing, download of {self.MODELS_URL + name} failed")
 
     def executeImage(self, image, data):
         result = self.data.predict(image)
