@@ -509,6 +509,13 @@ class ImageClassifier(r.ImageExecutor):
         self.ci = Interrogator(Config())
         self.LT = LabelTable
         self.classes = classes
+        # Bild: Base64, Pfad oder nweb-ID (image_id); rank: Begriffe mit Komma getrennt
+        self.define_sig(d.Param('image', is_pos=False), d.Param('rank', is_pos=False), d.PInt('top', 2))\
+            .r(result='list')
+        self.define_sig(d.Param('image', is_pos=False), d.NP('rank_c', 'str', '1'), d.PInt('top', 2))\
+            .r(result='list')
+        self.define_sig(d.Param('image', is_pos=False), d.Param('similarity', is_pos=False))\
+            .r(result='float')
 
     def similarity(self, images_features, text):
         return self.ci.similarity(images_features, text)
@@ -704,6 +711,8 @@ class Aesthetics(r.ImageExecutor):
     """
     TAGS = [TAG.IMAGE]
 
+    META_NAME = 'aesthetics'
+
     MODULES = ['simple-aesthetics-predictor', 'scipy', 'torch', 'transformers']
 
     model = "shunk031/aesthetics-predictor-v1-vit-large-patch14"
@@ -714,6 +723,8 @@ class Aesthetics(r.ImageExecutor):
         """
         super().__init__('aesthetics')
         self.device = select_device(device_mode)
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        self.define_sig(d.Param('image', is_pos=False)).r(success='bool', message='str', value='float')
         self.load()
 
     def load(self):
@@ -744,6 +755,8 @@ class ImageFingerprint(r.ImageExecutor):
 
     def __init__(self):
         super().__init__('fingerprint')
+        # Bild: Base64, Pfad oder nweb-ID (image_id); value: average_hash als Hex-String
+        self.define_sig(d.Param('image', is_pos=False)).r(success='bool', message='str', value='str')
 
     def executeImage(self, image, data):
         try:

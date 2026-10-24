@@ -2,6 +2,7 @@ import json
 
 from nwebclient import runner, base
 from nwebclient import util
+from nwebclient import dev
 from nwebclient import base as b
 import os
 import os.path
@@ -202,12 +203,14 @@ class AgeAndGenderRunner(runner.ImageExecutor):
     """
     Schätzt Alter und Geschlecht der Gesichter in einem Bild mit age-and-gender.
     """
-    MODULES = ['age-and-gender']
+    MODULES = ['image', 'age-and-gender']
 
     MODELS_URL = 'https://raw.githubusercontent.com/b-oern/age-and-gender/master/example/models/'
 
     def __init__(self, args: util.Args = {}):
         super().__init__('age')
+        # Bild: Base64, Pfad oder nweb-ID (image_id); prediction: je Gesicht gender, age und face-Box
+        self.define_sig(dev.Param('image', is_pos=False)).r(prediction='list', s='str', img='str')
         from age_and_gender import AgeAndGender
         # apt install -y wget git curl python3 libjpeg-dev libpng-dev python3-dev python3-pip cmake gcc libx11-dev
         self.data = AgeAndGender()
@@ -241,6 +244,7 @@ class AgeAndGenderRunner(runner.ImageExecutor):
 
     def executeImage(self, image, data):
         result = self.data.predict(image)
+        # TODO min_age max_age
         return {'prediction': result, 's': str(result), 'img': str(image)}
 
 
