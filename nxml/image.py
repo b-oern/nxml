@@ -18,6 +18,7 @@ from nwebclient import NWebClient
 from nwebclient import NWebDoc
 from nwebclient import util as u
 from nwebclient import base as b
+from nwebclient import dev as d
 
 from nxml import analyse
 
@@ -95,6 +96,13 @@ class ImageEmbeddingCreator(r.ImageExecutor):
         self.nc = NWebClient(None)
         self.knn = None
         self.knn_ids = None
+        self.define_sig(d.PStr('inference', '1'))\
+            .set_description("Erstellt CLIP-Embeddings für alle nweb-Bilder ohne Embedding")\
+            .r(inference='str', success='bool')
+        self.define_sig(d.Param('q'), d.PInt('k', 5)).set_description("Sucht per Text die k ähnlichsten Bilder")\
+            .r(images='list')
+        self.define_sig(d.Param('image'), d.PInt('k', 5)).set_description("Sucht die k ähnlichsten Bilder zu einem Bild")\
+            .r(images='list')
 
     def extract_guid(self, file):
         a = file.split('/')
@@ -263,6 +271,15 @@ class ImageSimilarity(r.ImageExecutor):
 
     def __init__(self):
         super().__init__()
+        self.define_sig(d.PStr('index', '1'), d.PInt('limit', 10))\
+            .set_description("Vergleicht noch nicht indizierte nweb-Bilder mit allen anderen, Treffer als Meta")\
+            .r(**{'from': 'str'})
+        self.define_sig(d.PStr('index_async', '1')).set_description("Startet die Indizierung im Hintergrund")
+        self.define_sig(d.Param('image'), d.Param('b')).set_description("Ähnlichkeit zweier Bilder (SSIM, 0..1)")\
+            .r(success='bool', score='float')
+        self.define_sig(d.Param('image'), d.Param('search'))\
+            .set_description("Die 5 ähnlichsten Bilder einer nweb-Suche (SSIM)")\
+            .r(images='list', nweb='str', image_count='int')
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
@@ -427,6 +444,9 @@ class ObjectDetector(r.ImageExecutor):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(self.model_id)
         self.model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device)
+        self.define_sig(d.Param('image'), d.PStr('text', "a cat. a remote control."))\
+            .set_description("Zero-Shot-Objekterkennung, text: kleingeschriebene Objekte mit Punkt getrennt")\
+            .r(boxes='list', annotations='list', labels='list', request_text='str')
 
 
     def executeImage(self, image, data):
@@ -477,6 +497,12 @@ class ImageClassifier(r.ImageExecutor):
         self.ci = Interrogator(Config())
         self.LT = LabelTable
         self.classes = classes
+        self.define_sig(d.Param('image'), d.Param('rank'), d.PInt('top', 2))\
+            .set_description("Die top passendsten Begriffe aus rank (Komma getrennt)").r(result='list')
+        self.define_sig(d.Param('image'), d.PStr('rank_c', '1'), d.PInt('top', 2))\
+            .set_description("Die top passendsten der konfigurierten Klassen").r(result='list')
+        self.define_sig(d.Param('image'), d.Param('similarity'))\
+            .set_description("Ähnlichkeit zwischen Bild und Text").r(result='float')
 
     def similarity(self, images_features, text):
         return self.ci.similarity(images_features, text)
@@ -544,6 +570,10 @@ class DocumentAnalysis(r.ImageExecutor):
             self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
         except Exception as e:
             self.error(str(e))
+        f = self.define_sig(d.Param('image'))\
+            .set_description("Layout-Analyse einer Dokumentseite, image ist das Bild mit Boxen (Base64-JPEG)")
+        f.r(image='str', items='list')
+        f.r_fail()
 
     def pillow_image_to_base64_string(self, img):
         import base64
@@ -639,6 +669,10 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
 
     def __init__(self, build=True):
         super().__init__()
+        f = self.define_sig(d.Param('image'))\
+            .set_description("Layout-Analyse einer Dokumentseite im Docker-Container (wie DocumentAnalysis)")
+        f.r(image='str', items='list')
+        f.r_fail()
         if build:
             self.docker_build()
 
@@ -673,6 +707,7 @@ class Aesthetics(r.ImageExecutor):
     
     def __init__(self):
         super().__init__('aesthetics')
+        self.define_sig(d.Param('image')).set_description("Ästhetik-Score eines Bildes").r_success(value='float')
         self.load()
 
     def load(self):
@@ -703,7 +738,10 @@ class DepthEstimation(r.ImageExecutor):
         super().__init__(type)
         from transformers import pipeline
         self.pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
+        self.define_sig(d.Param('image')).set_description("Schätzt eine Tiefenkarte (Base64-PNG)")\
+            .r_success(image='str')
 
+    @staticmethod
     def to_b64(image) -> str:
         buffer = BytesIO()
         image.save(buffer, format="PNG")

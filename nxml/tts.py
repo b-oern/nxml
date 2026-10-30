@@ -1,6 +1,7 @@
 
 
 from nwebclient import runner as r
+from nwebclient import dev as d
 
 class Qwen3TTS(r.BaseJobExecutor):
     """
@@ -18,6 +19,8 @@ class Qwen3TTS(r.BaseJobExecutor):
     def __init__(self, type='tts'):
         super().__init__(type)
         self.define_vars('device', 'model_name', 'language')
+        self.define_sig(d.PStr('op', 'tts'), d.Param('text'), d.PStr('filename', 'tts.wav'))\
+            .set_description("Erzeugt Sprache aus Text und speichert sie als WAV-Datei").r_success()
 
     def generate(self, text, output_file='tts.wav'):
         import torch

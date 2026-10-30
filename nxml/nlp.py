@@ -7,6 +7,7 @@ from nwebclient import runner as r
 from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
+from nwebclient import dev as d
 from nwebclient.nlp import ParagraphParser
 
 
@@ -70,6 +71,14 @@ class TextExecutor(r.BaseJobExecutor):
 
     def __init__(self):
         super().__init__()
+        self.text_sig = self.define_sig(d.Param('text'))
+        self.doc_sig = self.define_sig(d.Param('document_id', 'int'))
+
+    def text_result(self, description, **result):
+        """ Beschreibung und Ergebnistyp fuer die Signaturen text und document_id (Inhalt des nweb-Dokuments) """
+        for sig in (self.text_sig, self.doc_sig):
+            sig.set_description(description)
+            sig.r(**result)
 
     def execute_text(self, text, data={}):
         return {'success': False, 'message': "TextExecutor::execute_text() not overwritten"}
@@ -147,7 +156,8 @@ class TextToText(TextExecutor):
         from transformers import pipeline
         self.param_names['text'] = "Texteingabe"
         self.model_name = model
-        self.pipe = pipeline("text2text-generation", model="Lelon/t5-german-paraphraser-large")
+        self.pipe = pipeline("text2text-generation", model=model)
+        self.text_result("Paraphrasiert bzw. korrigiert deutschen Text", generated_text='str')
 
     def generate(self, text):
         # pipe liefert [{'generated_text': 'Ich kann heute nicht pünktlich sein.'}]
@@ -179,9 +189,12 @@ class QuestionAnswering(r.BaseJobExecutor):
         self.pipe = pipeline("question-answering", model=model)
         self.context = context
         self.define_vars('context')
+        self.define_sig(d.Param('question'), d.PStr('context', ''))\
+            .set_description("Beantwortet eine Frage anhand eines Kontexts")\
+            .r(score='float', start='int', end='int', answer='str')
 
     def answer(self, question, context):
-        return self.pipe(question=question, context=question)
+        return self.pipe(question=question, context=context)
 
     def execute(self, data):
         if 'question' in data:
@@ -217,6 +230,11 @@ class TextClassifier(r.BaseJobExecutor):
         self.classes = classes
         from transformers import pipeline
         self.classifier = pipeline("zero-shot-classification", model=model)
+        self.define_sig(d.Param('classify'), d.Param('classes'))\
+            .set_description("Zero-Shot-Klassifikation eines Textes (classes mit Komma getrennt)")\
+            .r(sequence='str', labels='list', scores='list')
+        self.define_sig(d.Param('group'), d.Param('classes'))\
+            .set_description("Klassifiziert alle Dokumente einer nweb-Gruppe, Ausgabe nur im Log")
 
     def classify(self, text, classes):
         """
@@ -278,11 +296,12 @@ class TextWorker(TextExecutor):
                 'grammar': TextToText(TextToText.DE_GRAMMAR),
                 'paraphrase': TextToText(TextToText.DE_PARAPHRASE)
             }
+        self.text_result("Wendet die sentence_runner auf jeden Absatz an", result='list')
     def execute(self, data):
         if 'text' in data:
-            return self.process_text(data['text'], data)
+            return self.execute_text(data['text'], data)
         if 'sentence' in data:
-            return self.process_sentence(data['text'], data)
+            return self.process_sentence(data['sentence'], data)
         return super().execute(data)
 
     def execute_text(self, text, data={}):
@@ -330,6 +349,7 @@ class TextSummarization(TextExecutor):
         self.param_names['text'] = "Text der zusammengefasst werden soll"
         self.model = model
         self.pipe = pipeline("summarization", model=self.model)
+        self.text_result("Fasst einen Text zusammen", summary_text='str', value='str')
 
     def summerize(self, text) -> dict:
         """
@@ -380,6 +400,8 @@ class MailRespond(r.BaseJobExecutor):
         super().__init__()
         print("Args: " + str(args))
         self.param_names['text'] = "Nachrichtentext für den eine Antwort erstellt werden soll."
+        self.define_sig(d.Param('text')).set_description("Erstellt per LLM eine Antwort auf eine Mail")\
+            .r(**{'text': 'str', 'label': 'str', 'from': 'str'})
 
     def nxitems(self):
         return [
