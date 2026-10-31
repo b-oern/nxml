@@ -2,6 +2,7 @@ import json
 
 from nwebclient import runner, base
 from nwebclient import util
+from nwebclient import dev
 from nwebclient import base as b
 from nwebclient import dev as d
 import os
@@ -41,6 +42,9 @@ class Whisper(runner.BaseJobExecutor):
 
 
 class Toxity(runner.BaseJobExecutor):
+    """
+    Bewertet Texte mit Detoxify (multilingual) auf Toxizität, Beleidigungen, Drohungen und ähnliches.
+    """
     MODULES = ['detoxify']
     text_key = 'text'
 
@@ -63,6 +67,9 @@ class Toxity(runner.BaseJobExecutor):
 
 
 class Nltk(runner.BaseJobExecutor):
+    """
+    Erkennt die Sprache eines Textes und zerlegt ihn mit NLTK in Wörter.
+    """
     MODULES = ['nltk']
 
     def __init__(self):
@@ -93,6 +100,9 @@ class Nltk(runner.BaseJobExecutor):
 
 
 class FlairRunner(runner.BaseJobExecutor):
+    """
+    Erkennt Named Entities (Personen, Orte, Organisationen, ...) in Texten mit einem Flair-NER-Modell.
+    """
 
     MODULES = ['flair']
 
@@ -141,6 +151,9 @@ class FlairRunner(runner.BaseJobExecutor):
 
 
 class BertEmbeddings(runner.BaseJobExecutor):
+    """
+    Berechnet Text-Embeddings mit dem Sentence-Transformer all-MiniLM-L6-v2.
+    """
     MODULES = ['transformers', 'langchain', 'sentence_transformers', 'langchain-huggingface']
     model = "all-MiniLM-L6-v2"
 
@@ -200,26 +213,53 @@ class NsfwDetector(runner.ImageExecutor):
 
 
 class AgeAndGenderRunner(runner.ImageExecutor):
+    """
+    Schätzt Alter und Geschlecht der Gesichter in einem Bild mit age-and-gender.
+    """
+    MODULES = ['image', 'age-and-gender']
+
+    MODELS_URL = 'https://raw.githubusercontent.com/b-oern/age-and-gender/master/example/models/'
+
     def __init__(self, args: util.Args = {}):
-        super().__init__()
+        super().__init__('age')
+        # Bild: Base64, Pfad oder nweb-ID (image_id); prediction: je Gesicht gender, age und face-Box
+        self.define_sig(dev.Param('image', is_pos=False))\
+            .set_description("Schätzt Alter und Geschlecht der Gesichter im Bild")\
+            .r(prediction='list', s='str', img='str')
         from age_and_gender import AgeAndGender
         # apt install -y wget git curl python3 libjpeg-dev libpng-dev python3-dev python3-pip cmake gcc libx11-dev
-        # os.system('git clone https://github.com/b-oern/age-and-gender.git')
         self.data = AgeAndGender()
         predictor_file = args.get('age_and_gender_predictor',
                                   './age-and-gender/example/models/shape_predictor_5_face_landmarks.dat')
         classifier_file = args.get('age_and_gender_classifier',
                                    './age-and-gender/example/models/dnn_gender_classifier_v1.dat')
         dnn_file = args.get('age_and_gender_dnn', './age-and-gender/example/models/dnn_age_predictor_v1.dat')
-        if os.path.isfile(predictor_file):
-            self.data.load_shape_predictor(predictor_file)
-            self.data.load_dnn_gender_classifier(classifier_file)
-            self.data.load_dnn_age_predictor(dnn_file)
-        self.define_sig(d.Param('image')).set_description("Schätzt Alter und Geschlecht der Gesichter im Bild")\
-            .r(prediction='list', s='str', img='str')
+        self.insure_files_exists({
+            predictor_file: 'shape_predictor_5_face_landmarks.dat',
+            classifier_file: 'dnn_gender_classifier_v1.dat',
+            dnn_file: 'dnn_age_predictor_v1.dat'
+        })
+        self.data.load_shape_predictor(predictor_file)
+        self.data.load_dnn_gender_classifier(classifier_file)
+        self.data.load_dnn_age_predictor(dnn_file)
+
+    def insure_files_exists(self, files: dict):
+        """
+            Lädt fehlende Modelldateien aus https://github.com/b-oern/age-and-gender (example/models) herunter.
+            :param files: {lokaler Pfad: Dateiname im Repo}
+        """
+        for path, name in files.items():
+            if os.path.isfile(path):
+                continue
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            self.info(f"Downloading {name} -> {path}")
+            util.download(self.MODELS_URL + name, path)
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"Model file {path} missing, download of {self.MODELS_URL + name} failed")
 
     def executeImage(self, image, data):
         result = self.data.predict(image)
+        # TODO min_age max_age
         return {'prediction': result, 's': str(result), 'img': str(image)}
 
 
@@ -228,7 +268,7 @@ class ClipEmbeddings(runner.BaseJobExecutor):
       Erstellt Embeddings für Texte oder Bild
 
     """
-    MODULES = ['transformers', 'pillow']
+    MODULES = ['transformers', 'pillow', 'torch']
     model_id = 'openai/clip-vit-base-patch16'
     text_key = 'text'
     image_key = 'image'
@@ -289,6 +329,9 @@ class ClipEmbeddings(runner.BaseJobExecutor):
 
 
 class TextBlobRunner(runner.BaseJobExecutor):
+    """
+    Bestimmt Sentiment (Polarität, Subjektivität) und Sätze eines deutschen oder englischen Textes mit TextBlob.
+    """
     MODULES = ['textblob', 'textblob_de']
     type = 'textblob'
     text_key = 'text'
@@ -344,11 +387,17 @@ class TextBlobRunner(runner.BaseJobExecutor):
 
 
 class NlpPipeline(runner.Pipeline):
+    """
+    Führt Flair-NER, NLTK-Tokenisierung und TextBlob-Sentiment nacheinander auf einem Text aus.
+    """
     def __init__(self):
         super().__init__(FlairRunner(), Nltk(), TextBlobRunner())
 
 
 class AnalyseMain(runner.AutoDispatcher):
+    """
+    Leitet Jobs anhand von type an NLP-Pipeline, CLIP-/BERT-Embeddings oder Alters- und Geschlechtserkennung weiter.
+    """
     def __init__(self):
         super().__init__('type',
                          **self.create('nlp', NlpPipeline),

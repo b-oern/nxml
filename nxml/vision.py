@@ -14,6 +14,12 @@ import base64
 import requests
 import random
 import os.path
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Callable
+from enum import Enum
+import random
+import sys
 
 RESSOURCES = {
     'clf_model.joblib': 'https://pi.bsnx.net/ki-models/facesimilarity/clf_model.joblib',
@@ -160,11 +166,11 @@ def get_similarity(img1, img2):
     ##########################################################################################
     ##########################################################################################
 
-    feature_net = Siamese()
+    feature_net = Siamese().to(device)
     ckpt = torch.load(current_path + '/siamese_model.t7', map_location=device)
     # model_path = current_path + "/Hackathon-setup/siamese_model.t7"
     feature_net.load_state_dict(ckpt['net_dict'])
-    # model.eval()
+    feature_net.eval()
 
     with torch.no_grad():
         output1, output2 = feature_net(face1.to(device), face2.to(device))
@@ -196,6 +202,11 @@ def get_face_class(img1):
 
 
 class FaceSimilarity(r.ImageExecutor):
+    """
+    Vergleicht zwei Gesichtsbilder mit einem siamesischen Netz und liefert ihre Distanz.
+    """
+
+    MODULES = ['opencv-python', 'torch', 'torchvision', 'joblib', 'scikit-learn']
 
     TAGS = [TAG.IMAGE, '2-images']
 
@@ -209,19 +220,46 @@ class FaceSimilarity(r.ImageExecutor):
             .r_success(distance='float', value='float')
 
     def to_numpy(self, img):
+        # convert: PNGs mit Transparenz oder Graustufen haben nicht 3 Kanäle
+        img = img.convert('RGB')
         return np.array(img).reshape(img.size[1], img.size[0], 3).astype(np.uint8)
 
     def execute(self, data):
-        a = self.to_numpy(self.get_image('a', data))
-        b = self.to_numpy(self.get_image('b', data))
-        dist = get_similarity(a, b)
+        if 'page' in data:
+            return super().execute(data)
+        img_a = self.get_image('a', data)
+        img_b = self.get_image('b', data)
+        if img_a is None or img_b is None:
+            return self.fail('Two images required: a and b (Base64, path, URL or nweb-ID via a_id/b_id)')
+        dist = get_similarity(self.to_numpy(img_a), self.to_numpy(img_b))
         return self.success('ok', distance=dist, value=dist)
 
+    def ui_imageform(self, p: base.Page):
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "a_data");')
+            p.js_ready('nx_initFileDragArea("dropZoneB", "b_data");')
+            p.dropzone('dropZone', "Gesicht A hier ablegen")
+            p.hidden('a_data', '', "a_data")
+            p.dropzone('dropZoneB', "Gesicht B hier ablegen")
+            p.hidden('b_data', '', "b_data")
+            p.form_elem(self.action_btn_parametric("Vergleichen", dict(
+                type=self.type,
+                a='#a_data',
+                b='#b_data'
+            )))
+
     def part_index(self, p: base.Page, params={}):
-        p.input('a_id', id='a_id')
-        p.input('b_id', id='b_id')
-        p(self.action_btn_parametric("Compare", {'type':self.type, 'a_id': '#a_id', 'b_id': '#b_id'}))
+        with p.section(h="nweb-IDs"):
+            p.input('a_id', id='a_id')
+            p.input('b_id', id='b_id')
+            p(self.action_btn_parametric("Compare", {'type':self.type, 'a_id': '#a_id', 'b_id': '#b_id'}))
+        self.ui_imageform(p)
         p.pre('', id='result')
+
+
+class Position(Enum):
+    PREFIX = "prefix"
+    POSTFIX = "postfix"
 
 
 class ComfyUi(r.BaseJobExecutor):
@@ -243,6 +281,7 @@ class ComfyUi(r.BaseJobExecutor):
                   die Bilder werden nach comfyui_path/input geschrieben
     """
 
+    MODULES = ['opencv-python', 'torch', 'torchvision']
     PROMPT_TITLE = 'Positive Prompt'
     PROMPT_KEYS = ('text', 'prompt')
     IMAGE_CLASSES = ('LoadImage',)
@@ -251,12 +290,15 @@ class ComfyUi(r.BaseJobExecutor):
 
     def __init__(self, server_url="http://127.0.0.1:8188", args: u.Args = {}):
         super().__init__('comfyui')
+        if args is None:
+            args = u.Args()
         self.cfg = args.get(self.type, {})
         self.server_url = server_url
         if 'server_url' in self.cfg:
             self.server_url = self.cfg['server_url'].strip()
         self.wait_time = 4
-        self.define_vars('server_url', 'wait_time')
+        self.default_count = 10
+        self.define_vars('server_url', 'wait_time', 'default_count')
         self.define_sig(d.Param('prompt'), d.Param('workflow'), d.PInt('count', 1), d.PStr('random_seed', '0'))\
             .set_description("Startet einen Workflow (API-Export) mit Prompt, Bilder als file.<Titel> (Base64)")\
             .r(prompt_id='str', number='int', node_errors='dict')
@@ -283,6 +325,19 @@ class ComfyUi(r.BaseJobExecutor):
             .set_description("Speichert einen Workflow (Base64-JSON) in workflow_dir")
         f.r_success(workflow='str')
         f.r_fail()
+        self.define_sig(d.PStr('op', 'workflow'), d.Param('workflow', 'dict'), d.PInt('count', 1))\
+            .set_description("Sendet einen fertigen Workflow (API-Format) an ComfyUI").r_success(result='dict')
+        self.define_sig(d.PStr('op', 'q_c_prompt'), d.Param('payload', 'dict'))\
+            .set_description("Legt einen fertigen Workflow (payload) als Jobdatei ab").r_success()
+        self.define_sig(d.PStr('op', 'prepare_workflow'), d.Param('workflow'), d.Param('title'), d.Param('name'),
+                        d.Param('prompt'))\
+            .set_description("Jobdatei, die prompt in den Eingang name des Nodes title schreibt")\
+            .r_success(job_id='str')
+        self.define_sig(d.PStr('op', 'queue_i4'), d.Param('prompt'), d.PInt('count', 10))\
+            .set_description("Ideogram-4-Job als Jobdatei ablegen").r_success(job_id='str')
+        self.define_sig(d.PStr('op', 'template'), d.Param('path'))\
+            .set_description("Fuellt ein Workflow-Template (value_<Name>=Wert) und legt es als Jobdatei ab")\
+            .r_success(job_guid='str')
 
     def merge(self, a: dict, b: dict, path=[]):
         try:
@@ -443,6 +498,15 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return response.json()
 
+    def execute_q_c_prompt(self, data):
+        self.info("q_c_promt("+str(data.keys())+")")
+        self.create_queued_job(dict(
+            type=self.type,
+            op='workflow',
+            workflow=data['payload']
+        ))
+        return self.success()
+
     def inject_prompt(self, prompt, workflow):
         found = self.find_prompt_node(workflow)
         if found is not None:
@@ -523,6 +587,15 @@ class ComfyUi(r.BaseJobExecutor):
             values = json.loads(values)
         for elem in values:
             workflow = self.inject_value_by_title(workflow, elem['title'], elem['key'], elem['value'])
+        return self.send_to_comfyui(workflow, server_url, data)
+
+    def send_to_comfyui(self, workflow, server_url=None, data={}):
+        """
+        Sendet einen Workflow (API-Format) count-mal an ComfyUI,
+        mit random_seed=1 oder count > 1 jeweils mit neuen Seeds
+        """
+        if server_url is None:
+            server_url = self.server_url
         count = max(int(data.get('count', 1)), 1)
         random_seed = count > 1 or str(data.get('random_seed', '0')) == '1'
         response = None
@@ -537,6 +610,12 @@ class ComfyUi(r.BaseJobExecutor):
 
     def history(self):
         response = requests.get(self.server_url + '/history')
+        # object(guid: {"prompt": ..., "outputs": ..., status: { completed}})
+        response.raise_for_status()
+        return response.json()
+
+    def history_job(self, jobid):
+        response = requests.get(self.server_url + f'/history/{jobid}')
         # object(guid: {"prompt": ..., "outputs": ..., status: { completed}})
         response.raise_for_status()
         return response.json()
@@ -559,6 +638,48 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return {'success': True}
 
+    def wait_for_job(self, jobid):
+        while True:
+            res = self.history_job(jobid)
+            if len(list(res.keys())) > 0:
+                break
+            time.sleep(1)
+        return res
+
+    def run_for_str(self, workflow_file, image):
+        with open(workflow_file, 'r') as f:
+            workflow = json.load(f)
+        filename, file_extension = os.path.splitext(image)
+        with open(image, 'rb') as f:
+            b64data = base64.b64encode(f.read())
+            workflow = self.inject_file_by_title(workflow, 'LoadImageEx', b64data,
+                                                 file_extension, 'image', None)
+        payload = {"prompt": workflow}
+        response = requests.post(f"{self.server_url}/prompt", json=payload)
+        res = response.json()
+        jobid = res['prompt_id']
+        result = self.wait_for_job(jobid)
+        print(str(result))
+        outputs = result.get(jobid, {}).get('outputs', {})
+        for output in outputs.values():
+            # "text": [ "photo,brown_hair, boots" ]
+            s = output.get('text', None)
+            if s is not None:
+                return s[0]
+        return None
+
+    def nweb_image_map(self, workflow_file, meta_ns, meta_name, instance=None, limit=10):
+        from nwebclient import NWebClient, NWebDoc
+        n = NWebClient(instance)
+        filterArgs = 'kind=image'
+        def map_fn(doc: NWebDoc, c):
+            doc.downloadThumbnail('current.jpg', 'm')
+            s = self.run_for_str(workflow_file, 'current.jpg')
+            os.remove('current.jpg')
+            return s
+        n.mapDocMeta(meta_ns=meta_ns, meta_name=meta_name, filterArgs=filterArgs, limit=limit, update=True,
+                     mapFunction=map_fn)
+
     def execute_rest(self, data):
         routes = ['history', 'queue', 'system_stats', 'free']
         if data['route'] in routes:
@@ -571,14 +692,27 @@ class ComfyUi(r.BaseJobExecutor):
         j = self.queue()
         return self.success(value=len(j.get('queue_pending', [])))
 
+    def create_job_filename(self, guid):
+        path = self.cfg.get('jobpath', '.')
+        return os.path.join(path, guid + '.job.json')
+
+    def create_queued_job(self, data, guid=None):
+        if guid is None:
+            guid = u.guid()
+        with open(self.create_job_filename(guid), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_guid=guid)
+
     def execute_queue(self, data={}):
         data.pop('op')
-        path = self.cfg.get('jobpath', '.')
         guid = u.guid()
         data['guid'] = guid
+        if 'count' not in data:
+            data['count'] = self.default_count
+        if 'workflow' not in data:
+            data['workflow'] = self.cfg.get('workflows', [''])[0]
         self.collect_files(data)
-        with open(os.path.join(path, guid + '.job.json'), 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        self.create_queued_job(data, guid)
         return self.success(job_id=guid)
 
     def execute_workflow_info(self, data):
@@ -645,6 +779,11 @@ class ComfyUi(r.BaseJobExecutor):
             p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
             p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
             p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free')))
+        with p.section("Weitere"):
+            p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt)),
+                  w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4)),
+                  w.a("Wert per Titel setzen (Jobdatei)", self.link(self.part_prepareworkflow)),
+                  w.a("Image Transform", self.link(self.part_image_transform))])
         p.pre('', id='result')
 
     def part_workflow_table(self, p: base.Page):
@@ -751,6 +890,118 @@ class ComfyUi(r.BaseJobExecutor):
             self.part_workflow_table(p)
         p.pre('', id='result')
 
+    def execute_prepare_workflow(self, data={}):
+        data.pop('op')
+        path = self.cfg.get('jobpath', '.')
+        guid = u.guid()
+        data['guid'] = guid
+        if 'workflow' not in data:
+            data['workflow'] = self.cfg.get('workflows', [''])[0]
+        data['values'] = [{'title': data['title'], 'key': data['name'], 'value': data['prompt']}]
+        #if 'file_title' in data and 'file_data' in data:
+        #    data['files'] = [dict(title=data['file_title'], data=data['file_data'])]
+        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_id=guid)
+
+    def part_prepareworkflow(self, p: base.Page, params={}):
+        p.h2("Prepare Workflow")
+        p.form_input('title', "Inject Title", value='Prompt', id='title', suggestions=[
+            'Positive Prompt'
+        ])
+        p.form_input('name', "Name", value='value', id='name')
+        p.form_elem('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow',
+                     suggestions=self.cfg.get('workflows', []))
+        p.form_elem(
+            self.action_btn_parametric("Queue", dict(
+                type=self.type,
+                op='prepare_workflow',
+                workflow='#workflow',
+                title='#title',
+                name='#name',
+                prompt='#prompt'
+            )))
+
+    def part_prompt(self, p: base.Page, params={}):
+        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
+        p.input('count', value='10', id='count')
+        base_p = dict(prompt='#prompt', type=self.type, workflow='#workflow', count='#count')
+        p(self.action_btn_parametric("Execute", base_p))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}))
+        p(self.action_btn_parametric("MQueue", dict(
+            type='mongodb', op='insert_one', row_prompt='#prompt', row_type=self.type, row_workflow='#workflow',
+            db='nweb', collection='jobs', row_count='#count')))
+        p(self.action_btn_parametric("CMQueue", dict(
+            type='crypt', op='encrypt_job',
+            data_prompt='#prompt', data_type=self.type, data_workflow='#workflow', data_count='#count',
+            cjob_key='row_c', cjob=dict(type='mongodb', db='nweb', collection='jobs', op='insert_one', row_type='crypt')
+        )))
+        p(self.action_btn_parametric("T", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/zit.json', value_prompt='#prompt'
+        )))
+        p(self.action_btn_parametric("Klein9B", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/Klein9B.json', value_prompt='#prompt'
+        )))
+        p(self.action_btn_parametric("Krea2", dict(
+            op='template', type=self.type, path='/mnt/d/ai/templates/Krea2.json', value_prompt='#prompt'
+        )))
+        p.pre('', id='result')
+
+    def part_prompt_i4(self, p: base.Page, params={}):
+        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        #p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
+        p.input('count', value='10', id='count')
+        base_p = dict(prompt='#prompt', type=self.type, count='#count')
+        #p(self.action_btn_parametric("Execute", base_p))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue_i4'}))
+        p.pre('', id='result')
+
+    def execute_workflow(self, data):
+        r = self.send_to_comfyui(data['workflow'], data=data)
+        return self.success(result=r)
+
+    def execute_queue_i4(self, data):
+        api_workflow = '/mnt/d/ai/i4_api.json'
+        cprompt = u.load_json_file(api_workflow)
+        cprompt["98:24"]["inputs"]["text"] = data['prompt']
+        data.pop('op')
+        path = self.cfg.get('jobpath', '.')
+        guid = u.guid()
+        data['guid'] = guid
+        data['op'] = 'workflow'
+        data['workflow'] = cprompt
+        if 'count' not in data:
+            data['count'] = self.default_count
+        with open(os.path.join(path, guid + '.job.json'), 'w') as f:
+            json.dump(data, f)
+        return self.success(job_id=guid)
+
+    def part_image_transform(self, p: base.Page, params={}):
+        p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+        p(w.dropzone(title="Bild hier ablegen"))
+        p.hidden('image_data', '', "image_data")
+        p.form_input('image_title', "Image Input Title", id='image_title')
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow', suggestions=self.cfg.get('workflows', []))
+
+        p.form_elem(
+            self.action_btn_parametric("Queue", dict(
+                type=self.type,
+                op='queue',
+                workflow='#workflow',
+                file_data='#image_data',
+                file_title='#image_title'
+            )) +
+            self.action_btn_parametric('Exec', {
+                'type': self.type,
+                'prompt': '',
+                'workflow': '#workflow',
+                'file_data': '#image_data',
+                'file_title': '#image_title'
+            })
+        )
+
     def part_nodes(self, p: base.Page, workflow: dict):
         p('<table class="comfyui_nodes"><tr><th>Id</th><th>Typ</th><th>Titel</th><th>Werte</th></tr>')
         for k, node in workflow.items():
@@ -795,6 +1046,101 @@ class ComfyUi(r.BaseJobExecutor):
         p.form_elem(self.action_btn_parametric("Ausführen", job) + ' ' +
                     self.action_btn_parametric("In Jobdatei ablegen", {**job, 'op': 'queue'}))
         p.pre('', id='result')
+
+
+    def run_apiworkflow(self, workflow: Path|str|dict, values: dict = {}, create_job_only=False):
+        if isinstance(workflow, Path) or isinstance(workflow, str):
+            workflow = u.load_json_file(workflow)
+        values[424242] = random.randint(0, sys.maxsize)
+        workflow = self.replace_value(workflow, values)
+        if create_job_only:
+            return self.create_queued_job(dict(
+                type=self.type,
+                op='workflow',
+                workflow=workflow
+            ))
+        else:
+            return self.execute_workflow(dict(workflow=workflow))
+
+    def execute_template(self, data={}):
+        path = data['path']
+        data.pop('type')
+        data.pop('op')
+        data.pop('path')
+        return self.run_apiworkflow(path, data, True)
+
+    @staticmethod
+    def extract_prompt(file):
+        im = Image.open(file)
+        im.load()  # Needed only for .png EXIF data (see citation above)
+        parameters = ''
+        message = ''
+        prompt = ''
+        try:
+            # params = json.loads(im.info)
+            # parameters = params['parameters']
+            if 'prompt' in im.info:
+                p = im.info['prompt']
+                data = json.loads(p)
+                return u.extract_longest_str(data)
+        except Exception as e:
+            print(e)
+            message = str(e)
+        return ""
+
+    @staticmethod
+    def rename_files(path: str | Path, extract_feature: Callable[[Path], str], position: Position) -> None:
+        """
+        Benennt alle Dateien im Verzeichnis um.
+        Args:
+            path: Verzeichnis mit den Dateien.
+            extract_feature: Callback, der für eine Datei ein Merkmal (String) liefert.
+            position: Einfügeposition des Merkmals (PREFIX oder POSTFIX| "prefix" or "postfix").
+        """
+        path = Path(path)
+        for file in path.iterdir():
+            if not file.is_file():
+                continue
+            feature = extract_feature(file)
+            if position == Position.PREFIX:
+                new_name = f"{feature}_{file.name}"
+            else:  # Position.POSTFIX
+                new_name = f"{file.stem}_{feature}{file.suffix}"
+            file.rename(file.with_name(new_name))
+
+    @staticmethod
+    def rename_with_promptid(path: str | Path):
+        def mapfn(filename):
+            prompt = ComfyUi.extract_prompt(filename)
+            return "p_" + u.hash_text(prompt)
+        ComfyUi.rename_files(path, mapfn, Position.PREFIX)
+
+    @staticmethod
+    def replace_value(data: dict, replace_vals: dict) -> dict:
+        """
+        Recursively traverse `data` and replace any value found in
+        `replace_vals` with its corresponding replacement.
+        Example:
+            data = {
+                "a": 1,
+                "b": {"c": 2, "d": [1, 2, 3]}
+            }
+
+            replace_value(data, {1: "one", 2: "two"})
+            # {'a': 'one', 'b': {'c': 'two', 'd': ['one', 'two', 3]}}
+        """
+        def _replace(obj):
+            if isinstance(obj, Mapping):
+                return {k: _replace(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [_replace(v) for v in obj]
+            elif isinstance(obj, tuple):
+                return tuple(_replace(v) for v in obj)
+            elif isinstance(obj, set):
+                return {_replace(v) for v in obj}
+            else:
+                return replace_vals.get(obj, obj)
+        return _replace(data)
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']

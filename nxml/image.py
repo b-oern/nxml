@@ -21,6 +21,7 @@ from nwebclient import base as b
 from nwebclient import dev as d
 
 from nxml import analyse
+from nxml.system import select_device
 
 
 class DatasetWriter:
@@ -257,10 +258,9 @@ class ImageSimilarity(r.ImageExecutor):
       via https://medium.com/scrapehero/exploring-image-similarity-approaches-in-python-b8ca0a3ed5a3
     """
 
-    MODULES = ['opencv-python', 'scikit-image']
-    TAGS = [TAG.IMAGE, '2-images']
+    MODULES = ['opencv-python', 'scikit-image', 'open_clip_torch', 'scipy', 'torch']
+    TAGS = ['image', '2-images']
     NS = 'image_similarity'
-    type = 'image_similarity'
 
     comparators = {
         'clip': 'compareImagesCLIP',
@@ -269,17 +269,27 @@ class ImageSimilarity(r.ImageExecutor):
 
     threshold = 0.9
 
-    def __init__(self):
-        super().__init__()
-        self.define_sig(d.PStr('index', '1'), d.PInt('limit', 10))\
+    clip_model = None
+    clip_preprocess = None
+
+    def __init__(self, args={}, device_mode='auto'):
+        """
+            :param device_mode: Gerät für CLIP: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
+        super().__init__('image_similarity')
+        self.device_mode = device_mode
+        self.device = None
+        # Bilder: Base64, Pfad oder nweb-ID (image_id / b_id)
+        self.define_sig(d.Param('image', is_pos=False), d.Param('b', is_pos=False), d.PStr('algo', 'ssim'))\
+            .set_description("Ähnlichkeit zweier Bilder (0..1), algo: ssim oder clip")\
+            .r(success='bool', score='float', algo='str')
+        self.define_sig(d.Param('image', is_pos=False), d.Param('search', is_pos=False))\
+            .set_description("Die 5 ähnlichsten Bilder einer nweb-Suche")\
+            .r(images='list', nweb='str', image_count='int')
+        self.define_sig(d.NP('index', 'str', '1'), d.PInt('limit', 10), d.PStr('q', ''))\
             .set_description("Vergleicht noch nicht indizierte nweb-Bilder mit allen anderen, Treffer als Meta")\
             .r(**{'from': 'str'})
-        self.define_sig(d.PStr('index_async', '1')).set_description("Startet die Indizierung im Hintergrund")
-        self.define_sig(d.Param('image'), d.Param('b')).set_description("Ähnlichkeit zweier Bilder (SSIM, 0..1)")\
-            .r(success='bool', score='float')
-        self.define_sig(d.Param('image'), d.Param('search'))\
-            .set_description("Die 5 ähnlichsten Bilder einer nweb-Suche (SSIM)")\
-            .r(images='list', nweb='str', image_count='int')
+        self.define_sig(d.NP('index_async', 'str', '1')).set_description("Startet die Indizierung im Hintergrund").r()
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
@@ -289,8 +299,8 @@ class ImageSimilarity(r.ImageExecutor):
             # Load images
             #image1 = cv2.imread(image_a)
             #image2 = cv2.imread(image_b)
-            image1 = cv2.cvtColor(numpy.array(image_a), cv2.COLOR_RGB2BGR)
-            image2 = cv2.cvtColor(numpy.array(image_b), cv2.COLOR_RGB2BGR)
+            image1 = cv2.cvtColor(numpy.array(image_a.convert('RGB')), cv2.COLOR_RGB2BGR)
+            image2 = cv2.cvtColor(numpy.array(image_b.convert('RGB')), cv2.COLOR_RGB2BGR)
             image2 = cv2.resize(image2, (image1.shape[1], image1.shape[0]), interpolation=cv2.INTER_AREA)
             # print(image1.shape, image2.shape)
             # Convert images to grayscale
@@ -299,39 +309,33 @@ class ImageSimilarity(r.ImageExecutor):
             # Calculate SSIM
             ssim_score = metrics.structural_similarity(image1_gray, image2_gray, full=True)
             #print(f"SSIM Score: ", round(ssim_score[0], 2))
-            return round(ssim_score[0], 2)
+            return round(float(ssim_score[0]), 2)
         except Exception as e:
             self.error(str(e))
             return 0
 
     def compareImagesCLIP(self, image_a, image_b):
-        # !pip install git+https://github.com/openai/CLIP.git
         # !pip install open_clip_torch
-        # !pip install sentence_transformers
         import torch
-        import open_clip
-        import cv2
-        from sentence_transformers import util
-        from PIL import Image
-        # image processing model
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-16-plus-240', pretrained="laion400m_e32")
-        model.to(device)
+        model, preprocess = self.load_clip()
 
         def imageEncoder(img):
-            img1 = preprocess(img).unsqueeze(0).to(device)
-            img1 = model.encode_image(img1)
-            return img1
+            img1 = preprocess(img.convert('RGB')).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                return model.encode_image(img1)
 
-        def generateScore(image1, image2):
-            img1 = imageEncoder(image1)
-            img2 = imageEncoder(image2)
-            cos_scores = util.pytorch_cos_sim(img1, img2)
-            score = round(float(cos_scores[0][0]) * 100, 2)
-            return score
+        cos = torch.nn.functional.cosine_similarity(imageEncoder(image_a), imageEncoder(image_b))
+        return round(float(cos[0]), 4)
 
-        #print(f"similarity Score: ", round(generateScore(image_a, image_b), 2))
-        return round(generateScore(image_a, image_b), 2)/100
+    def load_clip(self):
+        """ CLIP-Modell einmalig laden, nicht bei jedem Vergleich """
+        if self.clip_model is None:
+            import open_clip
+            self.device = select_device(self.device_mode)
+            model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-16-plus-240', pretrained="laion400m_e32")
+            self.clip_model = model.to(self.device).eval()
+            self.clip_preprocess = preprocess
+        return self.clip_model, self.clip_preprocess
 
     def compareImages(self, image_a, image_b, algo='clip'):
         method = getattr(self, self.comparators[algo])
@@ -414,12 +418,32 @@ class ImageSimilarity(r.ImageExecutor):
         else:
             return super().execute(data)
 
+    def ui_imageform(self, p: b.Page):
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+            p.js_ready('nx_initFileDragArea("dropZoneB", "b_data");')
+            p.dropzone('dropZone', "Bild A hier ablegen")
+            p.hidden('image_data', '', "image_data")
+            p.dropzone('dropZoneB', "Bild B hier ablegen")
+            p.hidden('b_data', '', "b_data")
+            p.form_select('algo', "Algorithmus", {'ssim': "SSIM (Struktur)", 'clip': "CLIP (Inhalt)"},
+                          value='ssim', id='algo')
+            p.form_elem(self.action_btn_parametric("Vergleichen", dict(
+                type=self.type,
+                image='#image_data',
+                b='#b_data',
+                algo='#algo'
+            )))
+        p.pre('', id='result')
 
     def executeImage(self, image, data):
         b = self.get_image('b', data)
         if b is not None:
-            score = self.compareImagesSSIM(image, b)
-            return {'success': True, 'score': score}
+            algo = data.get('algo') or 'ssim'
+            if algo not in self.comparators:
+                return self.fail(f'Unknown algo {algo!r}, use one of {list(self.comparators)}')
+            score = self.compareImages(image, b, algo)
+            return {'success': True, 'score': score, 'algo': algo}
         if 'search' in data:
             return self.searchSimilar(image, data)
         else:
@@ -432,6 +456,8 @@ class ObjectDetector(r.ImageExecutor):
 
     https://huggingface.co/spaces/EduardoPacheco/Grounding-Dino-Inference/blob/main/app.py
     """
+
+    MODULES = ['scipy', 'torch', 'transformers']
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     type = 'od'
 
@@ -447,7 +473,6 @@ class ObjectDetector(r.ImageExecutor):
         self.define_sig(d.Param('image'), d.PStr('text', "a cat. a remote control."))\
             .set_description("Zero-Shot-Objekterkennung, text: kleingeschriebene Objekte mit Punkt getrennt")\
             .r(boxes='list', annotations='list', labels='list', request_text='str')
-
 
     def executeImage(self, image, data):
         import torch
@@ -485,7 +510,7 @@ class ImageClassifier(r.ImageExecutor):
     """
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
 
-    MODULES = ['clip_interrogator']
+    MODULES = ['clip_interrogator', 'scipy']
 
     type = 'ic'
 
@@ -497,11 +522,12 @@ class ImageClassifier(r.ImageExecutor):
         self.ci = Interrogator(Config())
         self.LT = LabelTable
         self.classes = classes
-        self.define_sig(d.Param('image'), d.Param('rank'), d.PInt('top', 2))\
-            .set_description("Die top passendsten Begriffe aus rank (Komma getrennt)").r(result='list')
-        self.define_sig(d.Param('image'), d.PStr('rank_c', '1'), d.PInt('top', 2))\
+        # Bild: Base64, Pfad oder nweb-ID (image_id); rank: Begriffe mit Komma getrennt
+        self.define_sig(d.Param('image', is_pos=False), d.Param('rank', is_pos=False), d.PInt('top', 2))\
+            .set_description("Die top passendsten Begriffe aus rank").r(result='list')
+        self.define_sig(d.Param('image', is_pos=False), d.NP('rank_c', 'str', '1'), d.PInt('top', 2))\
             .set_description("Die top passendsten der konfigurierten Klassen").r(result='list')
-        self.define_sig(d.Param('image'), d.Param('similarity'))\
+        self.define_sig(d.Param('image', is_pos=False), d.Param('similarity', is_pos=False))\
             .set_description("Ähnlichkeit zwischen Bild und Text").r(result='float')
 
     def similarity(self, images_features, text):
@@ -532,7 +558,7 @@ class DocumentAnalysis(r.ImageExecutor):
       Läuft aktuell nur auf x86
 
     """
-    MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python']
+    MODULES = ['git+https://github.com/THU-MIG/yolov10.git', 'opencv-python', 'scipy', 'ultralytics']
     TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
     # pycocotools==2.0.7
     # PyYAML==6.0.1
@@ -665,6 +691,11 @@ class DocumentAnalysis(r.ImageExecutor):
 
 
 class DocumentAnalysisDockerd(r.ImageExecutor):
+    """
+    Baut und startet die Dokumentanalyse als Docker-Container und leitet Jobs per HTTP an ihn weiter.
+    """
+    MODULES = ['scipy', 'setuptools']
+
     TAGS = [TAG.IMAGE]
 
     def __init__(self, build=True):
@@ -701,39 +732,71 @@ class Aesthetics(r.ImageExecutor):
     """
     TAGS = [TAG.IMAGE]
 
-    MODULES = ['simple-aesthetics-predictor']
+    META_NAME = 'aesthetics'
+
+    MODULES = ['simple-aesthetics-predictor', 'scipy', 'torch', 'transformers']
 
     model = "shunk031/aesthetics-predictor-v1-vit-large-patch14"
     
-    def __init__(self):
+    def __init__(self, device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
         super().__init__('aesthetics')
-        self.define_sig(d.Param('image')).set_description("Ästhetik-Score eines Bildes").r_success(value='float')
+        self.device = select_device(device_mode)
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        self.define_sig(d.Param('image', is_pos=False)).set_description("Ästhetik-Score eines Bildes")\
+            .r(success='bool', message='str', value='float')
         self.load()
 
     def load(self):
         from transformers import CLIPProcessor
         from aesthetics_predictor import AestheticsPredictorV1
-        self.predictor = AestheticsPredictorV1.from_pretrained(self.model)
-        self.processor = CLIPProcessor.from_pretrained(self.model)
-
+        self.predictor = AestheticsPredictorV1.from_pretrained(self.model).to(self.device).eval()
+        # Standard-CLIPProcessor, ohne trust_remote_code fragt transformers interaktiv nach (blockiert im Server)
+        self.processor = CLIPProcessor.from_pretrained(self.model, trust_remote_code=False)
 
     def executeImage(self, image, data):
         import torch
         inputs = self.processor(images=image, return_tensors="pt")
-        # device = "cuda"
-        # predictor = predictor.to(device)
-        # inputs = {k: v.to(device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
         with torch.no_grad():  # or `torch.inference_model` in torch 1.9+
             outputs = self.predictor(**inputs)
         prediction = outputs.logits
         self.info(f"Aesthetics score: {prediction}")
-        return self.success(value=prediction.detach().numpy()[0][0])
+        return self.success(value=float(prediction[0][0]))
+
+
+class ImageFingerprint(r.ImageExecutor):
+    """
+      https://pypi.org/project/ImageHash/
+
+      select MIN(d.document_id), MAX(d.document_id) from document d join document__meta m on d.document_id = m.document_id where m.name = 'fingerprint' group by m.value having count(m.name) > 1
+    """
+    MODULES = ['ImageHash', 'scipy']
+
+    def __init__(self):
+        super().__init__('fingerprint')
+        # Bild: Base64, Pfad oder nweb-ID (image_id); value: average_hash als Hex-String
+        self.define_sig(d.Param('image', is_pos=False)).set_description("Wahrnehmungs-Hash (average_hash) eines Bildes")\
+            .r(success='bool', message='str', value='str')
+
+    def executeImage(self, image, data):
+        try:
+            import imagehash
+            fingerprint = imagehash.average_hash(image)
+            return self.success(value=str(fingerprint))
+        except Exception as e:
+            self.info(e)
+            return self.fail(str(e))
 
 
 class DepthEstimation(r.ImageExecutor):
     """
     https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
     """
+
+    MODULES = ['scipy', 'transformers']
     def __init__(self, type='depth'):
         super().__init__(type)
         from transformers import pipeline
@@ -751,4 +814,278 @@ class DepthEstimation(r.ImageExecutor):
     def executeImage(self, image, data):
         depthmap = self.pipe(image)["depth"]
         return self.success(image=self.to_b64(depthmap))
+
+
+class OCR(r.ImageExecutor):
+    """
+    Texterkennung (Bild -> Text), ausgelegt für schwache Rechner (Raspberry Pi, alte Laptops), kein PyTorch nötig.
+
+    Engines:
+     - tesseract: sehr sparsam, gut für Dokumente/Scans, Sprachen wählbar (apt install tesseract-ocr tesseract-ocr-deu)
+       https://github.com/tesseract-ocr/tesseract
+     - rapidocr: PP-OCR-Modelle über ONNX-Runtime (~15 MB), besser bei Fotos/Schildern/Screenshots
+       https://github.com/RapidAI/RapidOCR
+     - auto: tesseract falls installiert, sonst rapidocr
+
+    Die Engine wird erst beim ersten Job geladen.
+    """
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+
+    MODULES = ['scipy', 'pytesseract', 'rapidocr_onnxruntime']
+
+    ENGINES = ['auto', 'tesseract', 'rapidocr']
+
+    WINDOWS_TESSERACT = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+
+    def __init__(self, type='ocr', engine='auto', lang='deu+eng', max_side=2000, threads=1, tesseract_cmd=None):
+        """
+            :param engine: "auto", "tesseract" oder "rapidocr"
+            :param lang: Tesseract-Sprachen, z.B. "deu+eng" (nicht installierte werden ignoriert)
+            :param max_side: größere Bilder werden verkleinert (spart RAM und CPU)
+            :param threads: CPU-Threads für Tesseract, 1 ist auf schwachen Rechnern meist am schnellsten
+            :param tesseract_cmd: Pfad zur tesseract-Binary, falls nicht im PATH
+        """
+        super().__init__(type)
+        if engine not in self.ENGINES:
+            raise ValueError(f'engine must be one of {self.ENGINES}, got {engine!r}')
+        self.engine_mode = engine
+        self.engine = None
+        self.lang = lang
+        self.max_side = int(max_side)
+        self.threads = int(threads)
+        self.tesseract_cmd = tesseract_cmd
+        self.rapid = None
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        f = self.define_sig(d.Param('image', is_pos=False), d.PStr('lang', lang), d.PInt('psm', 3),
+                            d.PInt('min_confidence', 0), d.PInt('preprocess', 1))\
+            .set_description("Erkennt Text in einem Bild (OCR). lang/psm nur für Tesseract, "
+                             "min_confidence 0-100, preprocess 0/1")
+        f.r(success='bool', text='str', lines='list', engine='str', duration='float')
+        f.r_fail()
+
+    def tesseract_available(self):
+        try:
+            import pytesseract
+        except ImportError:
+            return False
+        if self.tesseract_cmd is None and os.name == 'nt' and os.path.exists(self.WINDOWS_TESSERACT):
+            self.tesseract_cmd = self.WINDOWS_TESSERACT
+        if self.tesseract_cmd is not None:
+            pytesseract.pytesseract.tesseract_cmd = self.tesseract_cmd
+        try:
+            pytesseract.get_tesseract_version()
+            return True
+        except Exception:
+            return False
+
+    def load(self):
+        if self.engine is not None:
+            return self.engine
+        if self.engine_mode in ('auto', 'tesseract') and self.tesseract_available():
+            # Tesseract nutzt sonst alle Kerne per OpenMP, was auf schwachen CPUs bremst
+            os.environ['OMP_THREAD_LIMIT'] = str(self.threads)
+            self.engine = 'tesseract'
+        elif self.engine_mode in ('auto', 'rapidocr'):
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+            except ImportError:
+                from rapidocr import RapidOCR
+            self.rapid = RapidOCR()
+            self.engine = 'rapidocr'
+        else:
+            raise RuntimeError('tesseract not found, install it (apt install tesseract-ocr tesseract-ocr-deu) '
+                               'or set tesseract_cmd')
+        self.info(f"OCR engine: {self.engine}")
+        return self.engine
+
+    def preprocess(self, image, enabled=True):
+        from PIL import Image, ImageOps
+        image = ImageOps.exif_transpose(image)
+        if image.mode not in ('RGB', 'L'):
+            image = image.convert('RGB')
+        scale = 1.0
+        side = max(image.size)
+        if side > self.max_side:
+            scale = self.max_side / side
+        elif enabled and side < 1000:
+            # kleine Bilder (Screenshots, Ausschnitte) werden mit mehr Pixeln deutlich besser erkannt
+            scale = 2.0
+        if scale != 1.0:
+            image = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+        if enabled and self.engine == 'tesseract':
+            image = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
+        return image, scale
+
+    def tesseract_langs(self, lang):
+        import pytesseract
+        try:
+            available = set(pytesseract.get_languages(config=''))
+        except Exception:
+            return lang
+        langs = [l for l in lang.split('+') if l in available]
+        if len(langs) == 0:
+            langs = ['eng'] if 'eng' in available else sorted(available)[:1]
+        return '+'.join(langs)
+
+    def ocr_tesseract(self, image, data, min_confidence):
+        import pytesseract
+        lang = self.tesseract_langs(data.get('lang', self.lang))
+        psm = int(data.get('psm', 3))
+        words = pytesseract.image_to_data(image, lang=lang, config=f'--psm {psm}',
+                                          output_type=pytesseract.Output.DICT)
+        lines = {}
+        for i, word in enumerate(words['text']):
+            conf = float(words['conf'][i])
+            if conf < 0 or word.strip() == '' or conf < min_confidence:
+                continue
+            key = (words['block_num'][i], words['par_num'][i], words['line_num'][i])
+            x, y, w, h = words['left'][i], words['top'][i], words['width'][i], words['height'][i]
+            line = lines.setdefault(key, {'words': [], 'confs': [], 'box': [x, y, x + w, y + h]})
+            line['words'].append(word)
+            line['confs'].append(conf)
+            box = line['box']
+            line['box'] = [min(box[0], x), min(box[1], y), max(box[2], x + w), max(box[3], y + h)]
+        result = []
+        for (block, par, _), line in lines.items():
+            result.append({
+                'text': ' '.join(line['words']),
+                'confidence': round(sum(line['confs']) / len(line['confs']), 1),
+                'box': line['box'],
+                'paragraph': f'{block}.{par}'
+            })
+        return result
+
+    def ocr_rapidocr(self, image, min_confidence):
+        import numpy
+        output = self.rapid(numpy.array(image.convert('RGB')))
+        if isinstance(output, tuple):
+            # rapidocr_onnxruntime: ([[box, text, score], ...] | None, elapse)
+            items = output[0] or []
+        else:
+            # rapidocr >= 2: Objekt mit boxes, txts, scores
+            items = list(zip(output.boxes, output.txts, output.scores)) if output.txts else []
+        result = []
+        for box, text, score in items:
+            conf = round(float(score) * 100, 1)
+            if conf < min_confidence or text.strip() == '':
+                continue
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            result.append({
+                'text': text,
+                'confidence': conf,
+                'box': [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+            })
+        return self.merge_segments(result)
+
+    @staticmethod
+    def merge_segments(segments):
+        """
+          RapidOCR liefert oft mehrere Segmente pro Zeile, Segmente auf gleicher Höhe werden zusammengefasst
+        """
+        lines = []
+        for seg in sorted(segments, key=lambda s: (s['box'][1] + s['box'][3]) / 2):
+            box = seg['box']
+            center = (box[1] + box[3]) / 2
+            line = lines[-1] if len(lines) > 0 else None
+            if line is not None and abs(center - line['center']) < (box[3] - box[1]) / 2:
+                line['segments'].append(seg)
+            else:
+                lines.append({'center': center, 'segments': [seg]})
+        result = []
+        for line in lines:
+            segs = sorted(line['segments'], key=lambda s: s['box'][0])
+            result.append({
+                'text': ' '.join(s['text'] for s in segs),
+                'confidence': round(sum(s['confidence'] for s in segs) / len(segs), 1),
+                'box': [min(s['box'][0] for s in segs), min(s['box'][1] for s in segs),
+                        max(s['box'][2] for s in segs), max(s['box'][3] for s in segs)]
+            })
+        return result
+
+    @staticmethod
+    def lines_to_text(lines):
+        text = ''
+        last_par = None
+        for line in lines:
+            par = line.get('paragraph')
+            if text != '':
+                text += '\n\n' if par is not None and par != last_par else '\n'
+            text += line['text']
+            last_par = par
+        return text
+
+    def executeImage(self, image, data):
+        try:
+            start = time.time()
+            self.load()
+            min_confidence = float(data.get('min_confidence', 0))
+            prepared, scale = self.preprocess(image, str(data.get('preprocess', 1)) not in ('0', 'false', 'False'))
+            if self.engine == 'tesseract':
+                lines = self.ocr_tesseract(prepared, data, min_confidence)
+            else:
+                lines = self.ocr_rapidocr(prepared, min_confidence)
+            # Boxen in Koordinaten des Originalbildes
+            for line in lines:
+                line['box'] = [round(v / scale) for v in line['box']]
+            return self.success(text=self.lines_to_text(lines), lines=lines, engine=self.engine,
+                                duration=round(time.time() - start, 3))
+        except Exception as e:
+            self.error(str(e))
+            return self.fail(str(e))
+
+
+class OcrAi(r.ImageExecutor):
+    """
+    Texterkennung mit einem End-to-End-Transformer: GOT-OCR 2.0 (~580M Parameter)
+    https://huggingface.co/stepfun-ai/GOT-OCR-2.0-hf
+
+    Deutlich besser als OCR bei Fotos, Handschrift-ähnlichen Schriften, Tabellen, Formeln und Layouts;
+    format=1 liefert formatierten Text (Markdown/LaTeX). Braucht PyTorch, auf CPU langsam, GPU empfohlen.
+    """
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+
+    MODULES = ['scipy', 'torch', 'transformers>=4.49', 'accelerate']
+
+    model_id = "stepfun-ai/GOT-OCR-2.0-hf"
+
+    def __init__(self, type='ocrai', device_mode='auto', max_new_tokens=4096):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+            :param max_new_tokens: maximale Länge des erkannten Textes in Tokens
+        """
+        super().__init__(type)
+        self.device = select_device(device_mode)
+        self.max_new_tokens = int(max_new_tokens)
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        f = self.define_sig(d.Param('image', is_pos=False), d.PInt('format', 0))\
+            .set_description("Erkennt Text in einem Bild mit GOT-OCR 2.0, format=1 für Markdown/LaTeX-Ausgabe")
+        f.r(success='bool', text='str', engine='str', duration='float')
+        f.r_fail()
+        self.load()
+
+    def load(self):
+        import torch
+        from transformers import AutoProcessor, AutoModelForImageTextToText
+        dtype = torch.float16 if self.device == 'cuda' else torch.float32
+        self.processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
+        self.model = AutoModelForImageTextToText.from_pretrained(self.model_id, torch_dtype=dtype)\
+            .to(self.device).eval()
+
+    def executeImage(self, image, data):
+        import torch
+        from PIL import ImageOps
+        try:
+            start = time.time()
+            image = ImageOps.exif_transpose(image).convert('RGB')
+            formatted = str(data.get('format', 0)) in ('1', 'true', 'True')
+            inputs = self.processor(image, return_tensors="pt", format=formatted).to(self.device)
+            with torch.no_grad():
+                ids = self.model.generate(**inputs, do_sample=False, tokenizer=self.processor.tokenizer,
+                                          stop_strings="<|im_end|>", max_new_tokens=self.max_new_tokens)
+            text = self.processor.decode(ids[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            return self.success(text=text.strip(), engine='got-ocr2', duration=round(time.time() - start, 3))
+        except Exception as e:
+            self.error(str(e))
+            return self.fail(str(e))
 

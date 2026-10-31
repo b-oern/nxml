@@ -18,6 +18,9 @@ from nxml import nlp
 
 
 class BaseLLM(r.BaseJobExecutor):
+    """
+    Basisklasse für LLM-Runner, die Prompts (auch verschlüsselt als cprompt) an ein Sprachmodell weitergeben.
+    """
     TAGS = ['llm']
 
     def __init__(self, type='llm'):
@@ -63,6 +66,9 @@ class BaseLLM(r.BaseJobExecutor):
 
 
 class OpenAiLLM(BaseLLM):
+    """
+    Schickt Prompts an die OpenAI-API oder einen kompatiblen Endpunkt (OPENAI_BASEURL).
+    """
 
     MODULES = ['openai']
 
@@ -136,6 +142,9 @@ class RLLM(BaseLLM):
 
 
 class OLLama(BaseLLM):
+    """
+    Schickt Prompts an ein lokal laufendes Ollama-Modell.
+    """
 
     MODULES = ['ollama']
 
@@ -155,6 +164,9 @@ class OLLama(BaseLLM):
 
 
 class OLLamaDockerd(BaseLLM):
+    """
+    Startet Ollama als Docker-Container und schickt Prompts an das darin geladene Modell.
+    """
 
     def __init__(self, type='ollm', model='llama3.2'):
         super().__init__(type)
@@ -188,6 +200,9 @@ class OLLamaDockerd(BaseLLM):
 
 
 class CohereLlm(BaseLLM):
+    """
+    Schickt Prompts an die Cohere-Chat-API.
+    """
 
     MODULES = ['cohere']
 
@@ -211,6 +226,9 @@ class CohereLlm(BaseLLM):
 
 
 class Gemini(BaseLLM):
+    """
+    Schickt Prompts an Google Gemini (gemini-2.5-flash).
+    """
 
     MODULES = ['google-genai']
 
@@ -373,6 +391,9 @@ def query(image_path, prompt, model="mistralai/magistral-small-2509", api_key=No
 
 
 class Vision(r.BaseJobExecutor):
+    """
+    Lässt Bilder aus nweb von einem Vision-Modell beschreiben und speichert die Beschreibung als Metadaten.
+    """
     meta_ns = 'ai'
     meta_name = 'description_de'
     limit = 10

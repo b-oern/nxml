@@ -131,6 +131,11 @@ class Event(object):
 
 
 class LlmProxy(r.BaseJobExecutor):
+    """
+    Flask-Proxy, der OpenAI-kompatible /v1/-Anfragen (auch Streaming) an eine konfigurierbare LLM-API weiterleitet.
+    """
+    MODULES = ['Flask']
+
     def __init__(self, url='https://api.openai.com/v1/'):
         super().__init__('llmproxy')
         self.url = url

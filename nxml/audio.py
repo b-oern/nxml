@@ -10,6 +10,9 @@ from nwebclient import dev as d
 
 
 class LibRosa(r.BaseJobExecutor):
+    """
+    Analysiert Audiodateien mit librosa, z.B. Tempo und Mel-Spektrogramm.
+    """
     MODULES = ['librosa']
     type = 'librosa'
 
@@ -60,7 +63,7 @@ class CommandRecognition(r.BaseJobExecutor):
 
     pip install git+https://github.com/huggingface/transformers
     """
-    MODULES = ['datasets, soundfile, librosa']
+    MODULES = ['datasets', 'soundfile', 'librosa', 'transformers']
 
     type = 'speech_reg'
 
@@ -146,6 +149,9 @@ class AudioGenerator(r.BaseJobExecutor):
 
 
 class FFmpeg(r.BaseJobExecutor):
+    """
+    Liest mit ffmpeg Informationen über Mediendateien aus, aktuell die Dauer.
+    """
     MODULES = ['ffmpeg-python']
     
     def __init__(self):
@@ -170,7 +176,7 @@ class PiperTTS(r.BaseJobExecutor):
 
     /home/pi/tts/piper
     """
-    MODULES = ['piper-tts']
+    MODULES = ['piper-tts', 'Flask']
     CFGS = ['pipertts']
 
     models = {
