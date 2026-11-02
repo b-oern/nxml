@@ -4,6 +4,7 @@ from nwebclient import runner, base
 from nwebclient import util
 from nwebclient import dev
 from nwebclient import base as b
+from nwebclient import dev as d
 import os
 import os.path
 import base64
@@ -24,6 +25,8 @@ class Whisper(runner.BaseJobExecutor):
         # TODO search for ffmpeg in path  os.environ['PATH'] os.pathsep
         import whisper
         self.model = whisper.load_model("base")
+        self.define_sig(d.Param('audio')).set_description("Transkribiert eine Audiodatei (Pfad)").r(text='str')
+        self.define_sig(d.Param('url')).set_description("Lädt Audio von einer URL und transkribiert es").r(text='str')
 
     def execute(self, data):
         if 'url' in data:
@@ -49,6 +52,8 @@ class Toxity(runner.BaseJobExecutor):
         super().__init__()
         from detoxify import Detoxify
         self.classifier_toxity = Detoxify('multilingual')
+        self.define_sig(d.Param('text')).set_description("Bewertet die Toxizität eines Textes (mehrsprachig)")\
+            .r(toxity='dict', success='bool')
 
     def execute(self, data):
         if isinstance(data, str):
@@ -74,6 +79,8 @@ class Nltk(runner.BaseJobExecutor):
             nltk.find('punkt')
         except LookupError:
             nltk.download('punkt')
+        self.define_sig(d.Param('text')).set_description("Erkennt die Sprache und zerlegt den Text in Wörter")\
+            .r(lang='str', words='list', success='bool')
 
     def nltk_lang(self, lang):
         if lang == 'de':
@@ -107,6 +114,8 @@ class FlairRunner(runner.BaseJobExecutor):
             self.tagger = SequenceTagger.load(model)
         except (ImportError, ModuleNotFoundError) as e:
             print("Error: Init FlairRunner, " + str(e))
+        self.define_sig(d.Param('text')).set_description("Named Entity Recognition (Flair)")\
+            .r(ner='list', success='bool')
 
     def tag_text(self, text):
         from flair.data import Sentence
@@ -153,6 +162,8 @@ class BertEmbeddings(runner.BaseJobExecutor):
         #from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
         from langchain_huggingface import HuggingFaceEmbeddings
         self.embeddings = HuggingFaceEmbeddings(model_name=self.model)
+        self.define_sig(d.Param('text')).set_description("Erstellt ein Text-Embedding (Sentence-Transformer)")\
+            .r(embedding='list', embedding_model='str', success='bool')
 
     def execute(self, data):
         try:
@@ -187,6 +198,8 @@ class NsfwDetector(runner.ImageExecutor):
             print("[NsfwDetector] Downloading model")
             util.download(self.model_url, self.model_filename)
         self.model = predict.load_model(self.model_filename)
+        self.define_sig(d.Param('image')).set_description("Bewertet ein Bild auf NSFW-Inhalte")\
+            .r(nsfw_detector='dict', neutral='float', porn='float', sexy='float')
 
     def executeImage(self, image, data):
         from nsfw_detector import predict
@@ -210,7 +223,9 @@ class AgeAndGenderRunner(runner.ImageExecutor):
     def __init__(self, args: util.Args = {}):
         super().__init__('age')
         # Bild: Base64, Pfad oder nweb-ID (image_id); prediction: je Gesicht gender, age und face-Box
-        self.define_sig(dev.Param('image', is_pos=False)).r(prediction='list', s='str', img='str')
+        self.define_sig(dev.Param('image', is_pos=False))\
+            .set_description("Schätzt Alter und Geschlecht der Gesichter im Bild")\
+            .r(prediction='list', s='str', img='str')
         from age_and_gender import AgeAndGender
         # apt install -y wget git curl python3 libjpeg-dev libpng-dev python3-dev python3-pip cmake gcc libx11-dev
         self.data = AgeAndGender()
@@ -269,6 +284,12 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         self.model = CLIPModel.from_pretrained(self.model_id).to(self.torch_device)
         self.img_model = CLIPModel.from_pretrained(self.model_id)
         self.processor = AutoProcessor.from_pretrained(self.model_id)
+        self.define_sig(d.Param(self.text_key)).set_description("CLIP-Features und Token-Embeddings eines Textes")\
+            .r(features='list', embeddings='list', success='bool')
+        self.define_sig(d.Param(self.image_key)).set_description("CLIP-Features eines Bildes (Base64)")\
+            .r(features='list', success='bool')
+        self.define_sig(d.Param('image_filename')).set_description("CLIP-Features eines Bildes (Pfad)")\
+            .r(features='list', success='bool')
 
     def load_image(self, filename):
         with open(filename, "rb") as f:
@@ -317,6 +338,10 @@ class TextBlobRunner(runner.BaseJobExecutor):
 
     def __init__(self):
         super().__init__()
+        self.define_sig(d.Param(self.text_key), d.PStr('lang', 'en'))\
+            .set_description("Sentiment-Analyse und Satzzerlegung (lang: en oder de)")\
+            .r(sentimnet='dict', sentimnet_polarity='float', sentimnet_subjectivity='float', sentences='list',
+               success='bool')
 
     def get_textblob(self, text, lang='en'):
         if lang == 'de':

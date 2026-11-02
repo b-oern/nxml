@@ -18,6 +18,7 @@ class LibRosa(r.BaseJobExecutor):
 
     def __init__(self):
         super().__init__()
+        self.define_sig(d.Param('file')).set_description("Schätzt das Tempo (BPM) einer Audiodatei").r(tempo='float')
 
     def execute_file(self, file):
         import librosa
@@ -70,6 +71,8 @@ class CommandRecognition(r.BaseJobExecutor):
         super().__init__()
         from transformers import pipeline
         self.classifier = pipeline("audio-classification", model=model)
+        self.define_sig(d.Param('audio')).set_description("Erkennt gesprochene Befehlswörter in Audio")\
+            .r(result='list')
         self.param_names['audio'] = "{'path': 'down/1816b768_nohash_0.wav', 'array': array([ 0.00079346, -0.00543213, -0.00054932, ..., -0.00717163,-0.00415039, -0.00811768]), 'sampling_rate': 16000}"
 
     def predict(self, audio):
@@ -153,6 +156,8 @@ class FFmpeg(r.BaseJobExecutor):
     
     def __init__(self):
         super().__init__('ffmpeg')
+        self.define_sig(d.Param('duration')).set_description("Dauer einer Mediendatei (Pfad) in Sekunden")\
+            .r(duration='str')
     
     def execute(self, data):
         import ffmpeg
@@ -183,7 +188,9 @@ class PiperTTS(r.BaseJobExecutor):
 
     def __init__(self, type='pipertts', path=None, args: u.Args = {}):
         super().__init__(type)
-        self.define_sig(d.Param('text', is_pos=False))
+        self.define_sig(d.Param('text', is_pos=False)).set_description("Erzeugt Sprache (WAV) aus Text")\
+            .r_success(file='str', cmd='str')
+        self.define_sig(d.PStr('output', '1')).set_description("Liefert die zuletzt erzeugte WAV-Datei")
         self.define_vars('path', 'file')
         self.file = None
         if path is None:
@@ -231,6 +238,8 @@ class ElevenLabs(r.BaseJobExecutor):
             api_key = args.get("elevenlabs_api_key", '')
         self.api_key = api_key
         self.voice_id = voice_id
+        self.define_sig(d.Param('tts')).set_description("Erzeugt Sprache (MP3) aus Text über ElevenLabs")\
+            .r(filename='str', data='str', response='int')
 
     def url(self):
         return 'https://api.elevenlabs.io/v1/text-to-speech/' + self.voice_id

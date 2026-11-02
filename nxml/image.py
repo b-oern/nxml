@@ -97,6 +97,13 @@ class ImageEmbeddingCreator(r.ImageExecutor):
         self.nc = NWebClient(None)
         self.knn = None
         self.knn_ids = None
+        self.define_sig(d.PStr('inference', '1'))\
+            .set_description("Erstellt CLIP-Embeddings für alle nweb-Bilder ohne Embedding")\
+            .r(inference='str', success='bool')
+        self.define_sig(d.Param('q'), d.PInt('k', 5)).set_description("Sucht per Text die k ähnlichsten Bilder")\
+            .r(images='list')
+        self.define_sig(d.Param('image'), d.PInt('k', 5)).set_description("Sucht die k ähnlichsten Bilder zu einem Bild")\
+            .r(images='list')
 
     def extract_guid(self, file):
         a = file.split('/')
@@ -274,12 +281,15 @@ class ImageSimilarity(r.ImageExecutor):
         self.device = None
         # Bilder: Base64, Pfad oder nweb-ID (image_id / b_id)
         self.define_sig(d.Param('image', is_pos=False), d.Param('b', is_pos=False), d.PStr('algo', 'ssim'))\
+            .set_description("Ähnlichkeit zweier Bilder (0..1), algo: ssim oder clip")\
             .r(success='bool', score='float', algo='str')
         self.define_sig(d.Param('image', is_pos=False), d.Param('search', is_pos=False))\
+            .set_description("Die 5 ähnlichsten Bilder einer nweb-Suche")\
             .r(images='list', nweb='str', image_count='int')
         self.define_sig(d.NP('index', 'str', '1'), d.PInt('limit', 10), d.PStr('q', ''))\
+            .set_description("Vergleicht noch nicht indizierte nweb-Bilder mit allen anderen, Treffer als Meta")\
             .r(**{'from': 'str'})
-        self.define_sig(d.NP('index_async', 'str', '1')).r()
+        self.define_sig(d.NP('index_async', 'str', '1')).set_description("Startet die Indizierung im Hintergrund").r()
 
     def compareImagesSSIM(self, image_a, image_b):
         import cv2
@@ -460,6 +470,9 @@ class ObjectDetector(r.ImageExecutor):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.processor = AutoProcessor.from_pretrained(self.model_id)
         self.model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id).to(self.device)
+        self.define_sig(d.Param('image'), d.PStr('text', "a cat. a remote control."))\
+            .set_description("Zero-Shot-Objekterkennung, text: kleingeschriebene Objekte mit Punkt getrennt")\
+            .r(boxes='list', annotations='list', labels='list', request_text='str')
 
     def executeImage(self, image, data):
         import torch
@@ -511,11 +524,11 @@ class ImageClassifier(r.ImageExecutor):
         self.classes = classes
         # Bild: Base64, Pfad oder nweb-ID (image_id); rank: Begriffe mit Komma getrennt
         self.define_sig(d.Param('image', is_pos=False), d.Param('rank', is_pos=False), d.PInt('top', 2))\
-            .r(result='list')
+            .set_description("Die top passendsten Begriffe aus rank").r(result='list')
         self.define_sig(d.Param('image', is_pos=False), d.NP('rank_c', 'str', '1'), d.PInt('top', 2))\
-            .r(result='list')
+            .set_description("Die top passendsten der konfigurierten Klassen").r(result='list')
         self.define_sig(d.Param('image', is_pos=False), d.Param('similarity', is_pos=False))\
-            .r(result='float')
+            .set_description("Ähnlichkeit zwischen Bild und Text").r(result='float')
 
     def similarity(self, images_features, text):
         return self.ci.similarity(images_features, text)
@@ -583,6 +596,10 @@ class DocumentAnalysis(r.ImageExecutor):
             self.DETECTION_MODEL = YOLO("yolov10x_best.pt")
         except Exception as e:
             self.error(str(e))
+        f = self.define_sig(d.Param('image'))\
+            .set_description("Layout-Analyse einer Dokumentseite, image ist das Bild mit Boxen (Base64-JPEG)")
+        f.r(image='str', items='list')
+        f.r_fail()
 
     def pillow_image_to_base64_string(self, img):
         import base64
@@ -683,6 +700,10 @@ class DocumentAnalysisDockerd(r.ImageExecutor):
 
     def __init__(self, build=True):
         super().__init__()
+        f = self.define_sig(d.Param('image'))\
+            .set_description("Layout-Analyse einer Dokumentseite im Docker-Container (wie DocumentAnalysis)")
+        f.r(image='str', items='list')
+        f.r_fail()
         if build:
             self.docker_build()
 
@@ -724,7 +745,8 @@ class Aesthetics(r.ImageExecutor):
         super().__init__('aesthetics')
         self.device = select_device(device_mode)
         # Bild: Base64, Pfad oder nweb-ID (image_id)
-        self.define_sig(d.Param('image', is_pos=False)).r(success='bool', message='str', value='float')
+        self.define_sig(d.Param('image', is_pos=False)).set_description("Ästhetik-Score eines Bildes")\
+            .r(success='bool', message='str', value='float')
         self.load()
 
     def load(self):
@@ -756,7 +778,8 @@ class ImageFingerprint(r.ImageExecutor):
     def __init__(self):
         super().__init__('fingerprint')
         # Bild: Base64, Pfad oder nweb-ID (image_id); value: average_hash als Hex-String
-        self.define_sig(d.Param('image', is_pos=False)).r(success='bool', message='str', value='str')
+        self.define_sig(d.Param('image', is_pos=False)).set_description("Wahrnehmungs-Hash (average_hash) eines Bildes")\
+            .r(success='bool', message='str', value='str')
 
     def executeImage(self, image, data):
         try:
@@ -778,7 +801,10 @@ class DepthEstimation(r.ImageExecutor):
         super().__init__(type)
         from transformers import pipeline
         self.pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
+        self.define_sig(d.Param('image')).set_description("Schätzt eine Tiefenkarte (Base64-PNG)")\
+            .r_success(image='str')
 
+    @staticmethod
     def to_b64(image) -> str:
         buffer = BytesIO()
         image.save(buffer, format="PNG")
@@ -788,4 +814,278 @@ class DepthEstimation(r.ImageExecutor):
     def executeImage(self, image, data):
         depthmap = self.pipe(image)["depth"]
         return self.success(image=self.to_b64(depthmap))
+
+
+class OCR(r.ImageExecutor):
+    """
+    Texterkennung (Bild -> Text), ausgelegt für schwache Rechner (Raspberry Pi, alte Laptops), kein PyTorch nötig.
+
+    Engines:
+     - tesseract: sehr sparsam, gut für Dokumente/Scans, Sprachen wählbar (apt install tesseract-ocr tesseract-ocr-deu)
+       https://github.com/tesseract-ocr/tesseract
+     - rapidocr: PP-OCR-Modelle über ONNX-Runtime (~15 MB), besser bei Fotos/Schildern/Screenshots
+       https://github.com/RapidAI/RapidOCR
+     - auto: tesseract falls installiert, sonst rapidocr
+
+    Die Engine wird erst beim ersten Job geladen.
+    """
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+
+    MODULES = ['scipy', 'pytesseract', 'rapidocr_onnxruntime']
+
+    ENGINES = ['auto', 'tesseract', 'rapidocr']
+
+    WINDOWS_TESSERACT = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+
+    def __init__(self, type='ocr', engine='auto', lang='deu+eng', max_side=2000, threads=1, tesseract_cmd=None):
+        """
+            :param engine: "auto", "tesseract" oder "rapidocr"
+            :param lang: Tesseract-Sprachen, z.B. "deu+eng" (nicht installierte werden ignoriert)
+            :param max_side: größere Bilder werden verkleinert (spart RAM und CPU)
+            :param threads: CPU-Threads für Tesseract, 1 ist auf schwachen Rechnern meist am schnellsten
+            :param tesseract_cmd: Pfad zur tesseract-Binary, falls nicht im PATH
+        """
+        super().__init__(type)
+        if engine not in self.ENGINES:
+            raise ValueError(f'engine must be one of {self.ENGINES}, got {engine!r}')
+        self.engine_mode = engine
+        self.engine = None
+        self.lang = lang
+        self.max_side = int(max_side)
+        self.threads = int(threads)
+        self.tesseract_cmd = tesseract_cmd
+        self.rapid = None
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        f = self.define_sig(d.Param('image', is_pos=False), d.PStr('lang', lang), d.PInt('psm', 3),
+                            d.PInt('min_confidence', 0), d.PInt('preprocess', 1))\
+            .set_description("Erkennt Text in einem Bild (OCR). lang/psm nur für Tesseract, "
+                             "min_confidence 0-100, preprocess 0/1")
+        f.r(success='bool', text='str', lines='list', engine='str', duration='float')
+        f.r_fail()
+
+    def tesseract_available(self):
+        try:
+            import pytesseract
+        except ImportError:
+            return False
+        if self.tesseract_cmd is None and os.name == 'nt' and os.path.exists(self.WINDOWS_TESSERACT):
+            self.tesseract_cmd = self.WINDOWS_TESSERACT
+        if self.tesseract_cmd is not None:
+            pytesseract.pytesseract.tesseract_cmd = self.tesseract_cmd
+        try:
+            pytesseract.get_tesseract_version()
+            return True
+        except Exception:
+            return False
+
+    def load(self):
+        if self.engine is not None:
+            return self.engine
+        if self.engine_mode in ('auto', 'tesseract') and self.tesseract_available():
+            # Tesseract nutzt sonst alle Kerne per OpenMP, was auf schwachen CPUs bremst
+            os.environ['OMP_THREAD_LIMIT'] = str(self.threads)
+            self.engine = 'tesseract'
+        elif self.engine_mode in ('auto', 'rapidocr'):
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+            except ImportError:
+                from rapidocr import RapidOCR
+            self.rapid = RapidOCR()
+            self.engine = 'rapidocr'
+        else:
+            raise RuntimeError('tesseract not found, install it (apt install tesseract-ocr tesseract-ocr-deu) '
+                               'or set tesseract_cmd')
+        self.info(f"OCR engine: {self.engine}")
+        return self.engine
+
+    def preprocess(self, image, enabled=True):
+        from PIL import Image, ImageOps
+        image = ImageOps.exif_transpose(image)
+        if image.mode not in ('RGB', 'L'):
+            image = image.convert('RGB')
+        scale = 1.0
+        side = max(image.size)
+        if side > self.max_side:
+            scale = self.max_side / side
+        elif enabled and side < 1000:
+            # kleine Bilder (Screenshots, Ausschnitte) werden mit mehr Pixeln deutlich besser erkannt
+            scale = 2.0
+        if scale != 1.0:
+            image = image.resize((round(image.width * scale), round(image.height * scale)), Image.LANCZOS)
+        if enabled and self.engine == 'tesseract':
+            image = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
+        return image, scale
+
+    def tesseract_langs(self, lang):
+        import pytesseract
+        try:
+            available = set(pytesseract.get_languages(config=''))
+        except Exception:
+            return lang
+        langs = [l for l in lang.split('+') if l in available]
+        if len(langs) == 0:
+            langs = ['eng'] if 'eng' in available else sorted(available)[:1]
+        return '+'.join(langs)
+
+    def ocr_tesseract(self, image, data, min_confidence):
+        import pytesseract
+        lang = self.tesseract_langs(data.get('lang', self.lang))
+        psm = int(data.get('psm', 3))
+        words = pytesseract.image_to_data(image, lang=lang, config=f'--psm {psm}',
+                                          output_type=pytesseract.Output.DICT)
+        lines = {}
+        for i, word in enumerate(words['text']):
+            conf = float(words['conf'][i])
+            if conf < 0 or word.strip() == '' or conf < min_confidence:
+                continue
+            key = (words['block_num'][i], words['par_num'][i], words['line_num'][i])
+            x, y, w, h = words['left'][i], words['top'][i], words['width'][i], words['height'][i]
+            line = lines.setdefault(key, {'words': [], 'confs': [], 'box': [x, y, x + w, y + h]})
+            line['words'].append(word)
+            line['confs'].append(conf)
+            box = line['box']
+            line['box'] = [min(box[0], x), min(box[1], y), max(box[2], x + w), max(box[3], y + h)]
+        result = []
+        for (block, par, _), line in lines.items():
+            result.append({
+                'text': ' '.join(line['words']),
+                'confidence': round(sum(line['confs']) / len(line['confs']), 1),
+                'box': line['box'],
+                'paragraph': f'{block}.{par}'
+            })
+        return result
+
+    def ocr_rapidocr(self, image, min_confidence):
+        import numpy
+        output = self.rapid(numpy.array(image.convert('RGB')))
+        if isinstance(output, tuple):
+            # rapidocr_onnxruntime: ([[box, text, score], ...] | None, elapse)
+            items = output[0] or []
+        else:
+            # rapidocr >= 2: Objekt mit boxes, txts, scores
+            items = list(zip(output.boxes, output.txts, output.scores)) if output.txts else []
+        result = []
+        for box, text, score in items:
+            conf = round(float(score) * 100, 1)
+            if conf < min_confidence or text.strip() == '':
+                continue
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            result.append({
+                'text': text,
+                'confidence': conf,
+                'box': [int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))]
+            })
+        return self.merge_segments(result)
+
+    @staticmethod
+    def merge_segments(segments):
+        """
+          RapidOCR liefert oft mehrere Segmente pro Zeile, Segmente auf gleicher Höhe werden zusammengefasst
+        """
+        lines = []
+        for seg in sorted(segments, key=lambda s: (s['box'][1] + s['box'][3]) / 2):
+            box = seg['box']
+            center = (box[1] + box[3]) / 2
+            line = lines[-1] if len(lines) > 0 else None
+            if line is not None and abs(center - line['center']) < (box[3] - box[1]) / 2:
+                line['segments'].append(seg)
+            else:
+                lines.append({'center': center, 'segments': [seg]})
+        result = []
+        for line in lines:
+            segs = sorted(line['segments'], key=lambda s: s['box'][0])
+            result.append({
+                'text': ' '.join(s['text'] for s in segs),
+                'confidence': round(sum(s['confidence'] for s in segs) / len(segs), 1),
+                'box': [min(s['box'][0] for s in segs), min(s['box'][1] for s in segs),
+                        max(s['box'][2] for s in segs), max(s['box'][3] for s in segs)]
+            })
+        return result
+
+    @staticmethod
+    def lines_to_text(lines):
+        text = ''
+        last_par = None
+        for line in lines:
+            par = line.get('paragraph')
+            if text != '':
+                text += '\n\n' if par is not None and par != last_par else '\n'
+            text += line['text']
+            last_par = par
+        return text
+
+    def executeImage(self, image, data):
+        try:
+            start = time.time()
+            self.load()
+            min_confidence = float(data.get('min_confidence', 0))
+            prepared, scale = self.preprocess(image, str(data.get('preprocess', 1)) not in ('0', 'false', 'False'))
+            if self.engine == 'tesseract':
+                lines = self.ocr_tesseract(prepared, data, min_confidence)
+            else:
+                lines = self.ocr_rapidocr(prepared, min_confidence)
+            # Boxen in Koordinaten des Originalbildes
+            for line in lines:
+                line['box'] = [round(v / scale) for v in line['box']]
+            return self.success(text=self.lines_to_text(lines), lines=lines, engine=self.engine,
+                                duration=round(time.time() - start, 3))
+        except Exception as e:
+            self.error(str(e))
+            return self.fail(str(e))
+
+
+class OcrAi(r.ImageExecutor):
+    """
+    Texterkennung mit einem End-to-End-Transformer: GOT-OCR 2.0 (~580M Parameter)
+    https://huggingface.co/stepfun-ai/GOT-OCR-2.0-hf
+
+    Deutlich besser als OCR bei Fotos, Handschrift-ähnlichen Schriften, Tabellen, Formeln und Layouts;
+    format=1 liefert formatierten Text (Markdown/LaTeX). Braucht PyTorch, auf CPU langsam, GPU empfohlen.
+    """
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+
+    MODULES = ['scipy', 'torch', 'transformers>=4.49', 'accelerate']
+
+    model_id = "stepfun-ai/GOT-OCR-2.0-hf"
+
+    def __init__(self, type='ocrai', device_mode='auto', max_new_tokens=4096):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+            :param max_new_tokens: maximale Länge des erkannten Textes in Tokens
+        """
+        super().__init__(type)
+        self.device = select_device(device_mode)
+        self.max_new_tokens = int(max_new_tokens)
+        # Bild: Base64, Pfad oder nweb-ID (image_id)
+        f = self.define_sig(d.Param('image', is_pos=False), d.PInt('format', 0))\
+            .set_description("Erkennt Text in einem Bild mit GOT-OCR 2.0, format=1 für Markdown/LaTeX-Ausgabe")
+        f.r(success='bool', text='str', engine='str', duration='float')
+        f.r_fail()
+        self.load()
+
+    def load(self):
+        import torch
+        from transformers import AutoProcessor, AutoModelForImageTextToText
+        dtype = torch.float16 if self.device == 'cuda' else torch.float32
+        self.processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
+        self.model = AutoModelForImageTextToText.from_pretrained(self.model_id, torch_dtype=dtype)\
+            .to(self.device).eval()
+
+    def executeImage(self, image, data):
+        import torch
+        from PIL import ImageOps
+        try:
+            start = time.time()
+            image = ImageOps.exif_transpose(image).convert('RGB')
+            formatted = str(data.get('format', 0)) in ('1', 'true', 'True')
+            inputs = self.processor(image, return_tensors="pt", format=formatted).to(self.device)
+            with torch.no_grad():
+                ids = self.model.generate(**inputs, do_sample=False, tokenizer=self.processor.tokenizer,
+                                          stop_strings="<|im_end|>", max_new_tokens=self.max_new_tokens)
+            text = self.processor.decode(ids[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            return self.success(text=text.strip(), engine='got-ocr2', duration=round(time.time() - start, 3))
+        except Exception as e:
+            self.error(str(e))
+            return self.fail(str(e))
 

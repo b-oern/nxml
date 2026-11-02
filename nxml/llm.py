@@ -28,8 +28,10 @@ class BaseLLM(r.BaseJobExecutor):
         self.type = type
         self.count = 0
         self.define_vars('count')
-        self.define_sig(Param('prompt', 'str'))
-        self.define_sig(Param('cprompt', 'str'))
+        self.define_sig(Param('prompt', 'str')).set_description("Sendet einen Prompt an das LLM")\
+            .r_success(response='str')
+        self.define_sig(Param('cprompt', 'str')).set_description("Verschlüsselter Prompt (NPY_KEY), Antwort verschlüsselt")\
+            .r_success(response='str')
 
     def prompt(self, prompt, data={}):
         pass
@@ -268,6 +270,7 @@ class TransformText(nlp.TextExecutor):
         self.llm_type = llm_type
         self.post = post
         self.pre = pre
+        self.text_result("Formt den Text per LLM-Prompt (pre + text + post) um", response='str', value='str')
 
     def remove_generation_string(self, response: str):
         # TODO remove LLM "Hier ist der Text"
@@ -399,7 +402,9 @@ class Vision(r.BaseJobExecutor):
     def __init__(self):
         super().__init__('vision')
         self.define_vars('meta_ns', 'meta_name', 'limit', 'prompt')
-        self.define_sig(PStr('op', 'map'))
+        self.define_sig(PStr('op', 'map'))\
+            .set_description("Beschreibt nweb-Bilder per Vision-LLM und speichert das Ergebnis als Meta-Attribut")\
+            .r_success()
 
     def execute_map(self, data):
         self.nweb_map()

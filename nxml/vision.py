@@ -19,6 +19,7 @@ RESSOURCES = {
 from nwebclient import runner as r, base
 from nwebclient.runner import TAG
 from nwebclient import util as u
+from nwebclient import dev as d
 from nwebclient import base as b
 
 import math
@@ -200,6 +201,9 @@ class FaceSimilarity(r.ImageExecutor):
     def __init__(self):
         super().__init__()
         u.download_resources('./', RESSOURCES)
+        self.define_sig(d.Param('a'), d.Param('b'))\
+            .set_description("Distanz zweier Gesichter (Siamese-Netz), kleiner ist ähnlicher")\
+            .r_success(distance='float', value='float')
 
     def to_numpy(self, img):
         # convert: PNGs mit Transparenz oder Graustufen haben nicht 3 Kanäle
@@ -244,4 +248,3 @@ from nxml.comfyui import ComfyUi, Position
 
 
 __all__ = ['FaceSimilarity', 'ComfyUi']
-

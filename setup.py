@@ -15,7 +15,7 @@ if __name__ == '__main__':
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
-        packages=['nxml'],
+        packages=['nxml', 'nxml.video'],
         package_data={'nxml': ['docker/*']},
         include_package_data=True,
         entry_points={
@@ -41,6 +41,9 @@ if __name__ == '__main__':
                 'fingerprint = nxml.image:ImageFingerprint',
                 'aesthetics = nxml.image:Aesthetics',
                 'depth = nxml.image:DepthEstimation',
+                'ocr = nxml.image:OCR',
+                'ocrai = nxml.image:OcrAi',
+                'video_ocr = nxml.video.ocr:VideoOcr',
                 'summarize = nxml.nlp:TextSummarization',
                 'mail_respond = nxml.nlp:MailRespond',
                 'jeff = nxml.nlp:Jeff',
