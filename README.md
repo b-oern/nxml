@@ -34,3 +34,32 @@ z.B. die Anzeige eines Messgeräts. UI unter `/pysys/runner?type=video_ocr`:
 Ergebnis ist eine Tabelle mit Zeit, Wert und erkanntem Text, Export als CSV oder JSON.
 Optionen: `number_only` (nur die erste Zahl als Wert), `decimals` (feste Nachkommastellen, falls die OCR den Dezimalpunkt nicht erkennt: 2 macht aus `12 50` den Wert `12.50`), `invert` (helle Schrift auf dunkler Anzeige), `psm` (Tesseract, 7 = eine Zeile).
 Braucht OpenCV (`pip install opencv-python-headless`) oder ffmpeg.
+
+## LM Studio
+
+`lmstudio` (`nxml.llm:LMStudio`) nutzt einen lokalen [LM-Studio](https://lmstudio.ai)-Server (Standard `http://localhost:1234`).
+UI unter `/pysys/runner?type=lmstudio`:
+
+ - Status: Server-URL, erreichbar/nicht erreichbar, geladene Modelle; LM Studio (Daemon) und Server über das `lms`-CLI starten und stoppen, lesende CLI-Befehle (`lms status`, `ps`, `ls`, `runtime ls`, ...)
+ - Modelle: geladene und verfügbare Modelle mit Typ, Quantisierung, Größe und max. Kontext; laden (Kontextlänge, GPU-Anteil, TTL), entladen, herunterladen
+ - Chat: Modellauswahl, Systemprompt, `temperature`, `max_tokens`, Verlauf, Bild für Vision-Modelle, alternativ Completion ohne Chat-Template
+ - Embeddings: ein Text pro Zeile, Vektoren und Kosinus-Ähnlichkeit
+
+Jobs (`op=...`): `status`, `models`, `chat`, `completion`, `embed`, `load`, `unload`, `download`, `download_status`, `server_start`, `server_stop`, `daemon`, `cli`.
+Wie die anderen LLM-Runner versteht er auch `prompt` (und `cprompt`).
+
+Konfiguration: `LMSTUDIO_URL`, `LMSTUDIO_MODEL` (sonst das erste geladene LLM), `LMSTUDIO_EMBEDDING_MODEL`, `LMSTUDIO_LMS` (Pfad zu `lms`, sonst PATH oder `~/.lmstudio/bin`).
+Chat und Embeddings laufen über die OpenAI-kompatible API, Modelle, Laden und Download über die native REST-API `/api/v1` (Modellliste auch `/api/v0`).
+
+### Remote LM Studio
+
+`remote_lmstudio` (`nxml.remote.llm:RemoteLmStudio`) steuert den `lmstudio`-Runner einer anderen Instanz über einen Job-Speicher (Standard: MongoDB-Runner `mongodb`, verschlüsselt über den CryptRunner `crypt`). Senden und Abfragen übernimmt `RemoteJobMixin` aus dem Projekt nxrunner (`nxrunner.jobstore`), nxrunner muss installiert sein.
+
+```
+rlms: nxml.remote.llm:RemoteLmStudio(target="gpu-pc", store="mongodb", remote_type="lmstudio")
+```
+
+Gleiche Ops und gleiche UI wie `lmstudio`, die Statuszeile zeigt ausstehende Jobs und Fehler.
+Jobs warten bis zur Antwort (höchstens `wait` Sekunden, Standard 600); mit `async=1` wird der Job nur eingestellt und liefert `remote_guid`, das Ergebnis holt `op=remote_result guid=...` ab. `op=remote_state` liefert die Statuszeile.
+Die Antwortzeit hängt vom Ticker der Ziel-Instanz ab (z.B. `mongo_job_cron`) und von `poll_interval` (Standard 10 s).
+Test ohne zweite Instanz: `store: nxrunner.jobstore:DirectJobStore` und `RemoteLmStudio(target="local", store="store", poll_interval=1)`.
