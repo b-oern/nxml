@@ -15,7 +15,7 @@ if __name__ == '__main__':
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
-        packages=['nxml', 'nxml.video'],
+        packages=['nxml', 'nxml.video', 'nxml.remote'],
         package_data={'nxml': ['docker/*']},
         include_package_data=True,
         entry_points={
@@ -55,6 +55,8 @@ if __name__ == '__main__':
                 'gptllm = nxml.llm:OpenAiLLM',
                 'cohere = nxml.llm:CohereLlm',
                 'gemini = nxml.llm:Gemini',
+                'lmstudio = nxml.llm:LMStudio',
+                'remote_lmstudio = nxml.remote.llm:RemoteLmStudio',
                 'vision = nxml.llm:Vision',
                 'tt = nxml.llm:TransformText',
                 'llmproxy = nxml.proxy:LlmProxy',
