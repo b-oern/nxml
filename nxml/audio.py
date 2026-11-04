@@ -227,6 +227,7 @@ class ElevenLabs(r.BaseJobExecutor):
     """
       "tts": "nxml.audio:ElevenLabs"
     """
+    TAGS = ['external-api']
     type = 'tts'
     CHUNK_SIZE =1024
     voices = {

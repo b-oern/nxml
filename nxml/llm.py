@@ -205,6 +205,7 @@ class CohereLlm(BaseLLM):
     """
 
     MODULES = ['cohere']
+    TAGS = ['external-api']
 
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__('cohere')
@@ -231,6 +232,7 @@ class Gemini(BaseLLM):
     """
 
     MODULES = ['google-genai']
+    TAGS = ['external-api']
 
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__('gemini')

@@ -535,29 +535,43 @@ class ComfyUi(r.BaseJobExecutor):
               "vorbereitet, damit Prompt und Bilder an der richtigen Stelle landen.")
         with p.section("Workflows"):
             self.part_workflow_table(p)
-            p.ul([w.a("Workflow hochladen und vorbereiten", self.link(self.part_prepare)),
-                  w.a("Workflow ausführen", self.link(self.part_execute))])
+            p.ul([w.a("Workflow hochladen und vorbereiten", self.link(self.part_prepare),
+                      "API-Export hochladen, Prompt-Node und Bild-Titel festlegen"),
+                  w.a("Workflow ausführen", self.link(self.part_execute),
+                      "Vorbereiteten Workflow mit Prompt und Bildern starten")])
         with p.section("Server"):
             p.prop("Server", html.escape(self.server_url))
             p.prop("ComfyUI-Pfad", html.escape(self.cfg.get('comfyui_path', '- (nötig für Bilder)')))
             p.prop("Jobpfad", html.escape(self.cfg.get('jobpath', '.')))
             p.prop("Workflow-Ordner", html.escape(self.cfg.get('workflow_dir', '-')))
-            p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats')))
-            p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue')))
-            p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count')))
-            p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free')))
+            p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats'),
+                              hint="Systeminfos des Servers: Betriebssystem, RAM, GPUs und VRAM"))
+            p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue'),
+                              hint="Laufende und wartende Prompts in der ComfyUI-Queue"))
+            p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count'),
+                              hint="Anzahl der wartenden Prompts in der ComfyUI-Queue"))
+            p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free'),
+                              hint="Entlädt die Modelle und gibt RAM und VRAM des Servers frei"))
         with p.section("Weitere"):
-            p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt)),
-                  w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4)),
-                  w.a("Wert per Titel setzen (Jobdatei)", self.link(self.part_prepareworkflow)),
-                  w.a("Image Transform", self.link(self.part_image_transform))])
+            p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt),
+                      "Prompt direkt, als Jobdatei, über MongoDB oder verschlüsselt einreihen"),
+                  w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4),
+                      "Prompt mit dem festen Ideogram-4-Workflow als Jobdatei ablegen"),
+                  w.a("Wert per Titel setzen (Jobdatei)", self.link(self.part_prepareworkflow),
+                      "Jobdatei, die einen Text in den Eingang eines Nodes mit bestimmtem Titel schreibt"),
+                  w.a("Image Transform", self.link(self.part_image_transform),
+                      "Ein Bild in einen Workflow geben, direkt oder als Jobdatei")])
         p.pre('', id='result')
 
     def part_workflow_table(self, p: base.Page):
         if len(self.workflows()) == 0:
             p.div("Keine Workflows konfiguriert (workflows oder workflow_dir).")
             return
-        p('<table class="comfyui_workflows"><tr><th>Workflow</th><th>Prompt</th><th>Bilder</th><th>Status</th>'
+        p('<table class="comfyui_workflows"><tr>'
+          f'<th title="{html.escape("Dateiname, der volle Pfad steht im Tooltip der Zeile")}">Workflow</th>'
+          f'<th title="{html.escape(f"ja, wenn ein Text-Node mit {self.PROMPT_TITLE} im Titel markiert ist")}">Prompt</th>'
+          f'<th title="{html.escape("Titel der LoadImage-Nodes, unter diesen Namen werden Bilder übergeben")}">Bilder</th>'
+          f'<th title="{html.escape("bereit oder Anzahl der Hinweise, Details unter Vorbereiten")}">Status</th>'
           '<th></th></tr>')
         for wf in self.workflows():
             try:
@@ -567,8 +581,10 @@ class ComfyUi(r.BaseJobExecutor):
                 status = 'bereit' if info['ready'] else str(len(info['warnings'])) + ' Hinweis(e)'
             except (OSError, ValueError) as e:
                 prompt, images, status = '', '', 'Fehler: ' + html.escape(str(e))
-            actions = w.a("Ausführen", self.link_workflow(self.part_execute, wf)) + ' | ' + \
-                w.a("Vorbereiten", self.link_workflow(self.part_prepare, wf))
+            actions = w.a("Ausführen", self.link_workflow(self.part_execute, wf),
+                          "Workflow mit Prompt und Bildern starten") + ' | ' + \
+                w.a("Vorbereiten", self.link_workflow(self.part_prepare, wf),
+                    "Prompt-Node und Bild-Titel festlegen, Hinweise ansehen")
             p(f'<tr><td title="{html.escape(wf)}">{html.escape(os.path.basename(wf))}</td><td>{prompt}</td>'
               f'<td>{images}</td><td>{status}</td><td>{actions}</td></tr>')
         p('</table>')
@@ -614,8 +630,10 @@ class ComfyUi(r.BaseJobExecutor):
             for t in info['text_nodes']:
                 text = workflow[t['node']]['inputs'][t['key']]
                 options[t['node']] = f"{t['node']}: {t['title']} ({t['class_type']}) {text[:40]}"
-            p.form_select('prompt_node', "Prompt-Node", options, info['prompt']['node'] if info['prompt'] else '',
-                          id='prompt_node')
+            p.form_select('prompt_node', "Prompt-Node", options,
+                          info['prompt']['node'] if info['prompt'] else '', id='prompt_node',
+                          hint=f'Dieser Node erhält den Titel "{self.PROMPT_TITLE}", '
+                               f'bei allen anderen wird er entfernt')
         with p.section("Bilder"):
             if len(info['images']) == 0:
                 p.div("Keine LoadImage-Nodes, der Workflow braucht keine Bilder.")
@@ -624,7 +642,9 @@ class ComfyUi(r.BaseJobExecutor):
             for img in info['images']:
                 hid = self.html_id('title', img['node'])
                 p.form_input('title.' + img['node'], f"Node {html.escape(img['node'])}", id=hid,
-                             value=html.escape(img['title'], quote=True))
+                             value=html.escape(img['title'], quote=True),
+                             hint=f"Titel von LoadImage-Node {img['node']}, eindeutig je Workflow; "
+                                  f"das Bild wird als file.<Titel> übergeben")
                 job['title.' + img['node']] = '#' + hid
         with p.section("Seeds und Ausgaben"):
             p.div("Seeds (bei random_seed=1 oder count &gt; 1 zufällig): " +
@@ -635,9 +655,12 @@ class ComfyUi(r.BaseJobExecutor):
             self.part_nodes(p, workflow)
         with p.section("Speichern"):
             p.form_input('save_as', "Speichern als", id='save_as', value=html.escape(wf, quote=True),
-                         style='width: 100%; max-width: 600px;')
-            p.form_elem(self.action_btn_parametric("Speichern", job, self.js_open_workflow(self.part_prepare)) + ' ' +
-                        w.a("Ausführen", self.link_workflow(self.part_execute, wf)))
+                         style='width: 100%; max-width: 600px;',
+                         hint="Pfad der Workflow-Datei; ein anderer Pfad legt eine Kopie an")
+            p.form_elem(self.action_btn_parametric("Speichern", job, self.js_open_workflow(self.part_prepare),
+                                                   hint="Titel setzen, Prompt-Node markieren und Workflow speichern") +
+                        ' ' + w.a("Ausführen", self.link_workflow(self.part_execute, wf),
+                                  "Workflow mit Prompt und Bildern starten"))
         with p.section("Aufruf"):
             p.pre(json.dumps(self.example_job(wf, info), indent=2))
         p.pre('', id='result')
@@ -649,10 +672,12 @@ class ComfyUi(r.BaseJobExecutor):
         with p.section("Hochladen"):
             p.hidden('file_data', '', 'wf_data')
             self.part_dropzone(p, 'wf_data', "Workflow (API-JSON) hier ablegen")
-            p.form_input('name', "Dateiname", id='wf_name', value='workflow.json')
+            p.form_input('name', "Dateiname", id='wf_name', value='workflow.json',
+                         hint="Name im Workflow-Ordner, .json wird bei Bedarf ergänzt")
             p.prop("Ziel", html.escape(self.cfg.get('workflow_dir', '.')))
             job = dict(type=self.type, op='workflow_upload', file_data='#wf_data', name='#wf_name')
-            p(self.action_btn_parametric("Hochladen", job, self.js_open_workflow(self.part_prepare)))
+            p(self.action_btn_parametric("Hochladen", job, self.js_open_workflow(self.part_prepare),
+                                         hint="Speichert den Workflow im Workflow-Ordner und öffnet ihn zum Vorbereiten"))
         with p.section("Vorhandene Workflows"):
             self.part_workflow_table(p)
         p.pre('', id='result')
@@ -675,11 +700,13 @@ class ComfyUi(r.BaseJobExecutor):
         p.h2("Prepare Workflow")
         p.form_input('title', "Inject Title", value='Prompt', id='title', suggestions=[
             'Positive Prompt'
-        ])
-        p.form_input('name', "Name", value='value', id='name')
-        p.form_elem('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        ], hint="Titel des Nodes, in den der Text geschrieben wird")
+        p.form_input('name', "Name", value='value', id='name',
+                     hint="Name des Eingangs (inputs) im Node, z.B. text oder value")
+        p.form_elem(f'<textarea id="prompt" style="width: 600px; height:200px;" '
+                    f'title="{html.escape("Wert für den Eingang")}"></textarea>')
         p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow',
-                     suggestions=self.cfg.get('workflows', []))
+                     suggestions=self.cfg.get('workflows', []), hint="Pfad zum Workflow im API-Format")
         p.form_elem(
             self.action_btn_parametric("Queue", dict(
                 type=self.type,
@@ -688,41 +715,44 @@ class ComfyUi(r.BaseJobExecutor):
                 title='#title',
                 name='#name',
                 prompt='#prompt'
-            )))
+            ), hint="Legt eine Jobdatei im Jobpfad ab"))
 
     def part_prompt(self, p: base.Page, params={}):
-        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
-        p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
-        p.input('count', value='10', id='count')
+        p.div(f'<textarea id="prompt" style="width: 600px; height:200px;" '
+              f'title="{html.escape("Prompt für den Text-Node mit " + self.PROMPT_TITLE + " im Titel")}"></textarea>')
+        p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow',
+                hint="Pfad zum Workflow im API-Format")
+        p.input('count', value='10', id='count', hint="Anzahl der Durchläufe, jeweils mit neuem Seed")
         base_p = dict(prompt='#prompt', type=self.type, workflow='#workflow', count='#count')
-        p(self.action_btn_parametric("Execute", base_p))
-        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}))
+        p(self.action_btn_parametric("Execute", base_p, hint="Sendet den Prompt sofort an ComfyUI"))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue'}, hint="Legt eine Jobdatei im Jobpfad ab"))
         p(self.action_btn_parametric("MQueue", dict(
             type='mongodb', op='insert_one', row_prompt='#prompt', row_type=self.type, row_workflow='#workflow',
-            db='nweb', collection='jobs', row_count='#count')))
+            db='nweb', collection='jobs', row_count='#count'), hint="Job in MongoDB nweb.jobs eintragen"))
         p(self.action_btn_parametric("CMQueue", dict(
             type='crypt', op='encrypt_job',
             data_prompt='#prompt', data_type=self.type, data_workflow='#workflow', data_count='#count',
             cjob_key='row_c', cjob=dict(type='mongodb', db='nweb', collection='jobs', op='insert_one', row_type='crypt')
-        )))
+        ), hint="Job verschlüsselt in MongoDB nweb.jobs eintragen"))
         p(self.action_btn_parametric("T", dict(
             op='template', type=self.type, path='/mnt/d/ai/templates/zit.json', value_prompt='#prompt'
-        )))
+        ), hint="Template zit.json mit dem Prompt als Jobdatei ablegen"))
         p(self.action_btn_parametric("Klein9B", dict(
             op='template', type=self.type, path='/mnt/d/ai/templates/Klein9B.json', value_prompt='#prompt'
-        )))
+        ), hint="Template Klein9B.json mit dem Prompt als Jobdatei ablegen"))
         p(self.action_btn_parametric("Krea2", dict(
             op='template', type=self.type, path='/mnt/d/ai/templates/Krea2.json', value_prompt='#prompt'
-        )))
+        ), hint="Template Krea2.json mit dem Prompt als Jobdatei ablegen"))
         p.pre('', id='result')
 
     def part_prompt_i4(self, p: base.Page, params={}):
-        p.div('<textarea id="prompt" style="width: 600px; height:200px;"></textarea>')
+        p.div(f'<textarea id="prompt" style="width: 600px; height:200px;" '
+              f'title="{html.escape("Prompt für Ideogram 4")}"></textarea>')
         #p.input('workflow', value='/mnt/d/ai/z_image.json', id='workflow')
-        p.input('count', value='10', id='count')
+        p.input('count', value='10', id='count', hint="Anzahl der Durchläufe, jeweils mit neuem Seed")
         base_p = dict(prompt='#prompt', type=self.type, count='#count')
         #p(self.action_btn_parametric("Execute", base_p))
-        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue_i4'}))
+        p(self.action_btn_parametric("Queue", {**base_p, 'op': 'queue_i4'}, hint="Legt eine Jobdatei im Jobpfad ab"))
         p.pre('', id='result')
 
     def execute_workflow(self, data):
@@ -749,8 +779,10 @@ class ComfyUi(r.BaseJobExecutor):
         p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
         p(w.dropzone(title="Bild hier ablegen"))
         p.hidden('image_data', '', "image_data")
-        p.form_input('image_title', "Image Input Title", id='image_title')
-        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow', suggestions=self.cfg.get('workflows', []))
+        p.form_input('image_title', "Image Input Title", id='image_title',
+                     hint="Titel des LoadImage-Nodes, der das Bild erhält")
+        p.form_input('workflow', "Workflow", value='/mnt/d/ai/z_image.json', id='workflow',
+                     suggestions=self.cfg.get('workflows', []), hint="Pfad zum Workflow im API-Format")
 
         p.form_elem(
             self.action_btn_parametric("Queue", dict(
@@ -759,14 +791,14 @@ class ComfyUi(r.BaseJobExecutor):
                 workflow='#workflow',
                 file_data='#image_data',
                 file_title='#image_title'
-            )) +
+            ), hint="Legt eine Jobdatei im Jobpfad ab") +
             self.action_btn_parametric('Exec', {
                 'type': self.type,
                 'prompt': '',
                 'workflow': '#workflow',
                 'file_data': '#image_data',
                 'file_title': '#image_title'
-            })
+            }, hint="Sendet das Bild sofort an ComfyUI")
         )
 
     def part_nodes(self, p: base.Page, workflow: dict):
@@ -794,24 +826,31 @@ class ComfyUi(r.BaseJobExecutor):
             self.part_workflow_table(p)
             return
         wf, workflow, info = loaded
-        p.div(w.a("Vorbereiten", self.link_workflow(self.part_prepare, wf)))
+        p.div(w.a("Vorbereiten", self.link_workflow(self.part_prepare, wf),
+                  "Prompt-Node und Bild-Titel festlegen, Hinweise ansehen"))
         self.part_warnings(p, info)
         job = dict(type=self.type, workflow=wf, prompt='', count='#count', random_seed='#random_seed')
         if info['prompt']:
             text = workflow[info['prompt']['node']]['inputs'][info['prompt']['key']]
-            p.div(f'<textarea id="prompt" style="width: 100%; max-width: 600px; height: 200px;">'
+            tooltip = html.escape(f"Wird in Node {info['prompt']['node']} ({info['prompt']['title']}) geschrieben, "
+                                  f"vorbelegt mit dem Text aus dem Workflow")
+            p.div(f'<textarea id="prompt" style="width: 100%; max-width: 600px; height: 200px;" title="{tooltip}">'
                   f'{html.escape(text)}</textarea>')
             job['prompt'] = '#prompt'
         for img in info['images']:
             hid = self.html_id('image', img['node'])
             p.hidden('file.' + img['title'], '', hid)
-            p.div(html.escape(img['title']))
+            p.div(html.escape(img['title']),
+                  title=html.escape(f"Bild für LoadImage-Node {img['node']}, wird nach comfyui_path/input geschrieben"))
             self.part_dropzone(p, hid, "Bild hier ablegen")
             job['file.' + img['title']] = '#' + hid
-        p.form_input('count', "Anzahl", id='count', value='1', type='number', min='1')
-        p.form_select('random_seed', "Zufälliger Seed", {'1': 'ja', '0': 'nein'}, '1', id='random_seed')
-        p.form_elem(self.action_btn_parametric("Ausführen", job) + ' ' +
-                    self.action_btn_parametric("In Jobdatei ablegen", {**job, 'op': 'queue'}))
+        p.form_input('count', "Anzahl", id='count', value='1', type='number', min='1',
+                     hint="Anzahl der Durchläufe, ab 2 immer mit neuem Seed")
+        p.form_select('random_seed', "Zufälliger Seed", {'1': 'ja', '0': 'nein'}, '1', id='random_seed',
+                      hint="Seeds vor jedem Durchlauf zufällig setzen, sonst gelten die Werte im Workflow")
+        p.form_elem(self.action_btn_parametric("Ausführen", job, hint="Sendet den Workflow sofort an ComfyUI") + ' ' +
+                    self.action_btn_parametric("In Jobdatei ablegen", {**job, 'op': 'queue'},
+                                               hint="Legt eine Jobdatei im Jobpfad ab, Bilder werden mitgespeichert"))
         p.pre('', id='result')
 
 
