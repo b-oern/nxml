@@ -9,7 +9,7 @@ class Qwen3TTS(r.BaseJobExecutor):
       q = tts.Qwen3TTS()
       q.generate("Hallo Welt")
     """
-
+    TAGS = ['tts']
     MODULES = ['qwen-tts', 'soundfile', 'torch']
 
     device = "cuda:0"
