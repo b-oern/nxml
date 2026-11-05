@@ -39,6 +39,20 @@ class Whisper(runner.BaseJobExecutor):
         data['text'] = "" + str(result['text'])
         return data
 
+    def part_index(self, p: base.Page, params={}):
+        with p.section(h="Whisper Transkription")
+            p.form_input('url', "Audio-URL", id='url')
+            p(self.action_btn_parametric("Transkribieren (URL)", type=self.type, url='#url'))
+            p.form_input('audio', "Audio-Pfad", id='audio')
+            p(self.action_btn_parametric("Transkribieren (Pfad)", type=self.type, audio='#audio'))
+            p.dropzone('audio_drop', "Audiodatei hier ablegen")
+            p.hidden('audio_data', '', 'audio_data')
+            p.js_ready('nx_initFileDragArea("audio_drop", "audio_data");')
+            p(self.action_btn_parametric("Transkribieren (Upload)", type=self.type, file0='#audio_data'))
+        p.pre('', id='result')
+        p.hr()
+        p.prop("Modell", "base")
+
 
 class Toxity(runner.BaseJobExecutor):
     """
