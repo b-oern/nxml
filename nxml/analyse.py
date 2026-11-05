@@ -17,11 +17,10 @@ class Whisper(runner.BaseJobExecutor):
       "whisper": "nxml.analyse:Whisper",
     """
     MODULES = ['openai-whisper']
-
-    type = 'whisper'
+    TAGS = ['speech-to-text', 'audio-in']
 
     def __init__(self):
-        super().__init__()
+        super().__init__('whisper')
         # TODO search for ffmpeg in path  os.environ['PATH'] os.pathsep
         import whisper
         self.model = whisper.load_model("base")
@@ -49,7 +48,7 @@ class Toxity(runner.BaseJobExecutor):
     text_key = 'text'
 
     def __init__(self):
-        super().__init__()
+        super().__init__('toxity')
         from detoxify import Detoxify
         self.classifier_toxity = Detoxify('multilingual')
         self.define_sig(d.Param('text')).set_description("Bewertet die Toxizität eines Textes (mehrsprachig)")\
@@ -73,7 +72,7 @@ class Nltk(runner.BaseJobExecutor):
     MODULES = ['nltk']
 
     def __init__(self):
-        super().__init__()
+        super().__init__('nltk')
         import nltk
         try:
             nltk.find('punkt')

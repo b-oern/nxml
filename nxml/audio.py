@@ -14,10 +14,10 @@ class LibRosa(r.BaseJobExecutor):
     Analysiert Audiodateien mit librosa, z.B. Tempo und Mel-Spektrogramm.
     """
     MODULES = ['librosa']
-    type = 'librosa'
+    TAGS = ['audio-in']
 
     def __init__(self):
-        super().__init__()
+        super().__init__('librosa')
         self.define_sig(d.Param('file')).set_description("Schätzt das Tempo (BPM) einer Audiodatei").r(tempo='float')
 
     def execute_file(self, file):
@@ -60,15 +60,12 @@ class LibRosa(r.BaseJobExecutor):
 
 class CommandRecognition(r.BaseJobExecutor):
     """
-
-    pip install git+https://github.com/huggingface/transformers
+      Erkennt ein Aktivierungswort in einem Audio-Stream
     """
     MODULES = ['datasets', 'soundfile', 'librosa', 'transformers']
 
-    type = 'speech_reg'
-
     def __init__(self, model="MIT/ast-finetuned-speech-commands-v2"):
-        super().__init__()
+        super().__init__('speech_reg')
         from transformers import pipeline
         self.classifier = pipeline("audio-classification", model=model)
         self.define_sig(d.Param('audio')).set_description("Erkennt gesprochene Befehlswörter in Audio")\
@@ -176,6 +173,7 @@ class PiperTTS(r.BaseJobExecutor):
 
     /home/pi/tts/piper
     """
+    TAGS = ['tts']
     MODULES = ['piper-tts', 'Flask']
     CFGS = ['pipertts']
 
@@ -227,6 +225,7 @@ class ElevenLabs(r.BaseJobExecutor):
     """
       "tts": "nxml.audio:ElevenLabs"
     """
+    TAGS = ['tts']
     type = 'tts'
     CHUNK_SIZE =1024
     voices = {
