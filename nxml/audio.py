@@ -214,7 +214,7 @@ class PiperTTS(r.BaseJobExecutor):
         return super().execute(data)
 
     def part_index(self, p: base.Page, params={}):
-        with p.section(h="Piper TTS", id='piper'):
+        with p.section(h="Piper TTS"):
             audio_url = f'../../?type={self.type}&output=1'
             with p.t('div', id='pa1'):
                 p.audio(audio_url, id='a1')
