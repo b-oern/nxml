@@ -166,6 +166,8 @@ class FFmpeg(r.BaseJobExecutor):
 
 class PiperTTS(r.BaseJobExecutor):
     """
+     TTS für die deutsche Sprache
+
     https://www.thorsten-voice.de/thorsten-voice-%f0%9f%92%9b-piper/
     https://github.com/rhasspy/piper
 
@@ -212,13 +214,26 @@ class PiperTTS(r.BaseJobExecutor):
         return super().execute(data)
 
     def part_index(self, p: base.Page, params={}):
-        p.h1("Piper TTS")
-        p.audio(f'../../?type={self.type}&output=1')
-        p.form_input('text', "Text", id='text')
-        p(self.action_btn_parametric("TTS", dict(title='TTS', type=self.type, text='#text')))
-        p.pre('', id='result')
-        p.hr()
-        p.prop("Path", self.path)
+        with p.section(h="Piper TTS", id='piper'):
+            audio_url = f'../../?type={self.type}&output=1'
+            with p.t('div', id='pa1'):
+                p.audio(audio_url, id='a1')
+            p.form_input('text', "Text", id='text')
+            jobdef = dict(title='TTS', type=self.type, text='#text')
+            p.script("""
+                const piper_url = '""" + audio_url + """';
+                function on_pipertts(data) {
+                    document.getElementById('a1').remove();
+                    const a = document.createElement('audio');
+                    a.src = piper_url;
+                    document.getElementById('pa1').append(a);
+                }
+            """)
+            p(self.action_btn_parametric("TTS", jobdef), 'on_pipertts')
+        with p.section(h="Debug"):
+            p.pre('', id='result')
+            p.hr()
+            p.prop("Path", self.path)
 
 
 class ElevenLabs(r.BaseJobExecutor):
