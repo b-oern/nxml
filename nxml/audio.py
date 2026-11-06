@@ -229,7 +229,7 @@ class PiperTTS(r.BaseJobExecutor):
                     document.getElementById('pa1').append(a);
                 }
             """)
-            p(self.action_btn_parametric("TTS", jobdef), 'on_pipertts')
+            p(self.action_btn_parametric("TTS", jobdef, 'on_pipertts'))
         with p.section(h="Debug"):
             p.pre('', id='result')
             p.hr()
