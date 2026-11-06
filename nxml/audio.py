@@ -225,7 +225,9 @@ class PiperTTS(r.BaseJobExecutor):
                 function on_pipertts(data) {
                     document.getElementById('a1').remove();
                     const a = document.createElement('audio');
+                    a.id = 'a1';
                     a.src = piper_url;
+                    a.controls = 'controls';
                     document.getElementById('pa1').append(a);
                 }
             """)
