@@ -40,7 +40,7 @@ class Whisper(runner.BaseJobExecutor):
         return data
 
     def part_index(self, p: base.Page, params={}):
-        with p.section(h="Whisper Transkription")
+        with p.section(h="Whisper Transkription"):
             p.form_input('url', "Audio-URL", id='url')
             p(self.action_btn_parametric("Transkribieren (URL)", type=self.type, url='#url'))
             p.form_input('audio', "Audio-Pfad", id='audio')

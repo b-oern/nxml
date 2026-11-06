@@ -236,6 +236,7 @@ class PiperTTS(r.BaseJobExecutor):
             p.pre('', id='result')
             p.hr()
             p.prop("Path", self.path)
+            p.pre("TODO: Delete old wavs")
 
 
 class ElevenLabs(r.BaseJobExecutor):
