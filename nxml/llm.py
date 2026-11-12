@@ -278,13 +278,12 @@ class LMStudioUiMixin:
     PAGES = [('index', 'Status'), ('models', 'Modelle'), ('chat', 'Chat'), ('embeddings', 'Embeddings')]
 
     def part_page(self, p: b.Page, name, html, js):
-        nav = ' '.join(f'<a href="{self.link(page)}" class="{"active" if page == name else ""}">{title}</a>'
-                       for page, title in self.PAGES)
+        p.nav(*[(title, self.link(page)) for page, title in self.PAGES], active=self.link(name))
         cfg = self.lmstudio_cfg()
         remote = '<div class="lms-msg" id="lms-remote"></div>' if cfg.get('remote') else ''
         cfg = json.dumps(cfg).replace('</', '<\\/')
         p(f'<style>{LMSTUDIO_CSS}</style>')
-        p(f'<div class="lms"><nav class="lms-nav">{nav}</nav>{remote}{html}</div>')
+        p(f'<div class="lms">{remote}{html}</div>')
         # eigener Scope, damit $ nicht jQuery überdeckt
         p(f'<script>(function() {{\nconst LMS = {cfg};\n{LMSTUDIO_JS}\n{js}\n}})();</script>')
 
@@ -665,10 +664,6 @@ class LMStudio(LMStudioUiMixin, BaseLLM):
 
 LMSTUDIO_CSS = """
 .lms { max-width: 1100px; }
-.lms-nav { display: flex; gap: 6px; margin: 8px 0 14px; flex-wrap: wrap; }
-.lms-nav a { padding: 6px 12px; border: 1px solid #999; border-radius: 16px; text-decoration: none; color: inherit;
-  opacity: .7; }
-.lms-nav a.active { opacity: 1; font-weight: bold; border-width: 2px; }
 .lms-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .lms-row > label:first-child { min-width: 130px; }
 .lms input[type=number] { width: 90px; }

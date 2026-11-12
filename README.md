@@ -72,11 +72,12 @@ Test ohne zweite Instanz: `store: nxrunner.jobstore:DirectJobStore` und `RemoteL
 opencode: nxml.agents:OpenCodeAgent(project_path="C:/dev/projekt", model="anthropic/claude-sonnet-4-5")
 ```
 
-Parameter: `start=True` (Server sofort starten), `port=None` (freier Port), `project_path=None` (aktuelles Verzeichnis), `url` (vorhandenen Server nutzen), `provider`, `model`, `remote="origin"`.
+Parameter: `start=True` (Server sofort starten), `port=None` (freier Port), `project_path=None` (aktuelles Verzeichnis), `url` (vorhandenen Server nutzen), `password` (Basic Auth bzw. Pairing-Token, beim Selbststarten wird eines erzeugt), `provider`, `model`, `remote="origin"`.
+Genutzt wird die neue API unter `/api` (https://opencode.ai/docs/api), Prompts laufen asynchron, gewartet wird auf die `idle`-Nachricht der Session.
 
 `do_issue(name, task_text, wait=False)` legt den Branch `feat_<name>` an, lässt opencode `task_text` bearbeiten, committet (`feat: <name>`) und pusht den Branch und wechselt zurück auf den Ausgangs-Branch. Läuft ohne `wait` im Hintergrund, Stand über `op=list_issues`.
 Provider und Modell kommen aus `provider`/`model` des Agents (`set_model`, UI). Das Arbeitsverzeichnis muss sauber sein; Reste eines fehlgeschlagenen Laufs landen in `git stash`.
 
-UI unter `/pysys/runner?type=opencode`: Issues (Name, Provider/Modell-Auswahl, Aufgabe, Verlauf mit Tool-Aufrufen, Abbrechen) und Server (Status, Start/Stopp, Sessions).
-Weitere Ops: `status`, `server_start`, `server_stop`, `list_providers`, `set_model`, `list_sessions`, `session_messages`, `abort`, `ask`.
-Konfiguration: `OPENCODE_BIN`, `OPENCODE_URL`, `OPENCODE_PROVIDER`, `OPENCODE_MODEL`, `OPENCODE_SERVER_PASSWORD`. Der selbst gestartete Server erlaubt Bearbeiten/Bash ohne Rückfrage (`OPENCODE_CONFIG_CONTENT`, falls nicht gesetzt).
+UI unter `/pysys/runner?type=opencode`: Issues (Name, Provider/Modell-Auswahl, Aufgabe, Verlauf mit Tool-Aufrufen, Abbrechen) und Server (Status, Start/Stopp, Pairing-Link für die opencode-Web-UI, Sessions).
+Weitere Ops: `status`, `server_start`, `server_stop`, `pairing`, `list_providers`, `set_model`, `list_sessions`, `session_messages`, `abort`, `ask`.
+Konfiguration: `OPENCODE_BIN`, `OPENCODE_URL`, `OPENCODE_PROVIDER`, `OPENCODE_MODEL`, `OPENCODE_SERVER_PASSWORD`. Sessions werden mit allen Berechtigungen angelegt, offene Berechtigungsanfragen werden automatisch erlaubt.

@@ -13,6 +13,7 @@ import atexit
 import threading
 import subprocess
 import datetime
+import secrets
 
 import requests
 
@@ -43,7 +44,7 @@ class OpenCodeAgent(r.BaseJobExecutor):
 
     def __init__(self, start=True, port=None, project_path=None, type='opencode', url=None, provider=None,
                  model=None, opencode_bin=None, hostname='127.0.0.1', remote='origin', timeout=3600,
-                 args: u.Args = None):
+                 password=None, args: u.Args = None):
         """
             :param start: opencode-Server beim Erzeugen starten (sonst start_server() oder op=server_start)
             :param port: Port des Servers, None: freier Port (bzw. Port aus url)
@@ -53,6 +54,8 @@ class OpenCodeAgent(r.BaseJobExecutor):
             :param model: Standard-Modell (z.B. claude-sonnet-4-5 oder anthropic/claude-sonnet-4-5)
             :param remote: Git-Remote für den Push
             :param timeout: max. Sekunden für eine Antwort von opencode
+            :param password: Passwort bzw. Pairing-Token des Servers (Basic Auth), sonst OPENCODE_SERVER_PASSWORD;
+                             beim Selbststarten ohne Passwort wird eines erzeugt
         """
         super().__init__(type)
         if args is None:
@@ -72,7 +75,7 @@ class OpenCodeAgent(r.BaseJobExecutor):
         self.opencode_bin = opencode_bin or args.get('OPENCODE_BIN', None) or shutil.which('opencode')
         self.remote = remote
         self.timeout = float(timeout)
-        self.password = os.environ.get('OPENCODE_SERVER_PASSWORD', '')
+        self.password = password or os.environ.get('OPENCODE_SERVER_PASSWORD', '')
         self.username = os.environ.get('OPENCODE_SERVER_USERNAME', 'opencode')
         self.process = None
         self.server_log = []
@@ -105,9 +108,10 @@ class OpenCodeAgent(r.BaseJobExecutor):
             self.port = self.free_port()
         self.url = f'http://{self.hostname}:{self.port}'
         env = dict(os.environ)
-        # ohne Rückfragen arbeiten, der Server läuft ohne TUI, in der niemand Berechtigungen bestätigt
-        env.setdefault('OPENCODE_CONFIG_CONTENT', json.dumps(
-            {'permission': {'edit': 'allow', 'bash': 'allow', 'webfetch': 'allow'}}))
+        if not self.password:
+            self.password = secrets.token_urlsafe(24)
+        env['OPENCODE_SERVER_PASSWORD'] = self.password
+        env['OPENCODE_SERVER_USERNAME'] = self.username
         cmd = [self.opencode_bin, 'serve', '--port', str(self.port), '--hostname', self.hostname]
         self.info('Starte ' + ' '.join(cmd))
         self.process = subprocess.Popen(cmd, cwd=self.project_path, env=env, stdout=subprocess.PIPE,
@@ -138,66 +142,105 @@ class OpenCodeAgent(r.BaseJobExecutor):
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-    # -- HTTP-API --
+    # -- HTTP-API (/api, https://opencode.ai/docs/api) --
 
-    def api(self, path, payload=None, method=None, params=None, timeout=60):
-        """ Aufruf der opencode-API, directory=project_path wird immer mitgesendet """
+    # alles erlauben: der Server läuft ohne TUI, in der niemand Berechtigungen bestätigt
+    PERMISSIONS = [{'action': '*', 'resource': '*', 'effect': 'allow'}]
+
+    def api(self, path, payload=None, method=None, params=None, timeout=60, location=False):
+        """
+            Aufruf der opencode-API, liefert das JSON (bei {data: ...} nur data)
+            :param location: location[directory]=project_path mitsenden (Endpunkte mit location-Parameter)
+        """
         if not self.url:
             raise OpenCodeError('opencode-Server nicht gestartet')
         method = method or ('POST' if payload is not None else 'GET')
         auth = (self.username, self.password) if self.password else None
+        params = {k: v for k, v in (params or {}).items() if v not in (None, '')}
+        if location:
+            params['location[directory]'] = self.project_path
         try:
             resp = requests.request(method, self.url + path, json=payload, auth=auth, timeout=timeout,
-                                    params={'directory': self.project_path, **(params or {})})
+                                    params=params, headers={'Accept': 'application/json'})
         except requests.exceptions.ConnectionError:
             raise OpenCodeError(f'opencode unter {self.url} nicht erreichbar')
+        if resp.status_code == 401:
+            raise OpenCodeError('opencode: nicht angemeldet (401), password bzw. OPENCODE_SERVER_PASSWORD setzen')
         if resp.status_code >= 400:
             raise OpenCodeError(f'{method} {path}: {resp.status_code} {resp.text[:500]}')
         if resp.status_code == 204 or not resp.content:
             return True
-        try:
-            return resp.json()
-        except ValueError:
-            return resp.text
+        if 'json' not in resp.headers.get('Content-Type', ''):
+            raise OpenCodeError(f'{path}: keine API-Antwort ({resp.headers.get("Content-Type")}), '
+                                f'opencode zu alt oder falsche URL?')
+        data = resp.json()
+        if isinstance(data, dict) and 'data' in data:
+            return data['data']
+        return data
+
+    def server_info(self, timeout=5):
+        """ {version, pid, hostname, urls, paths} """
+        return self.api('/api/info', timeout=timeout)
 
     def online(self):
         try:
-            return bool(self.api('/global/health', timeout=3).get('healthy'))
+            return 'version' in self.server_info(timeout=3)
         except Exception:
             return False
 
-    def health(self):
-        return self.api('/global/health', timeout=5)
+    def pair(self):
+        """ Pairing-Link für Browser/Apps (einmalig, kurzlebig) """
+        code = self.api('/api/pair', {})
+        return {'url': f"{self.url}/auth/connect/{code['code']}", **code}
 
     def providers(self):
         """ {providers: [{id, name, models: [{id, name}]}], default: {providerID: modelID}} """
-        data = self.api('/config/providers')
-        res = []
-        for p in data.get('providers', []):
-            models = p.get('models', {})
-            models = models.values() if isinstance(models, dict) else models
-            res.append({'id': p.get('id'), 'name': p.get('name') or p.get('id'),
-                        'models': sorted([{'id': m.get('id'), 'name': m.get('name') or m.get('id')} for m in models],
-                                         key=lambda m: m['name'].lower())})
-        return {'providers': res, 'default': data.get('default', {})}
+        names = {}
+        try:
+            names = {p['id']: p.get('name') or p['id'] for p in self.api('/api/provider', location=True)}
+        except Exception:
+            pass
+        grouped = {}
+        for m in self.api('/api/model', location=True):
+            grouped.setdefault(m['providerID'], []).append({'id': m['id'], 'name': m.get('name') or m['id']})
+        res = [{'id': pid, 'name': names.get(pid, pid), 'models': sorted(ms, key=lambda m: m['name'].lower())}
+               for pid, ms in grouped.items()]
+        res.sort(key=lambda p: p['name'].lower())
+        default = {}
+        try:
+            d = self.api('/api/model/default', location=True)
+            if isinstance(d, dict) and d.get('providerID'):
+                default[d['providerID']] = d['id']
+        except Exception:
+            pass
+        return {'providers': res, 'default': default}
 
-    def sessions(self):
-        return self.api('/session')
+    def sessions(self, limit=50):
+        return self.api('/api/session', params={'directory': self.project_path, 'limit': limit, 'order': 'desc'})
 
-    def create_session(self, title=None):
-        return self.api('/session', {'title': title} if title else {})
+    def active_sessions(self):
+        return self.api('/api/session/active') or {}
+
+    def create_session(self, title=None, provider='', model=''):
+        body = {'location': {'directory': self.project_path}, 'permissions': self.PERMISSIONS}
+        if title:
+            body['title'] = title
+        ref = self.model_ref(provider, model)
+        if ref:
+            body['model'] = ref
+        return self.api('/api/session', body)
 
     def delete_session(self, session_id):
-        return self.api(f'/session/{session_id}', method='DELETE')
+        return self.api(f'/api/session/{session_id}', method='DELETE')
 
     def abort_session(self, session_id):
-        return self.api(f'/session/{session_id}/abort', {})
+        return self.api(f'/api/session/{session_id}/interrupt', {}, params={'resume': 'false'})
 
-    def messages(self, session_id, limit=None):
-        return self.api(f'/session/{session_id}/message', params={'limit': limit} if limit else None)
+    def messages(self, session_id, limit=200, order='asc'):
+        return self.api(f'/api/session/{session_id}/message', params={'limit': limit, 'order': order})
 
     def diff(self, session_id):
-        return self.api(f'/session/{session_id}/diff')
+        return self.api(f'/api/session/{session_id}/diff')
 
     def model_ref(self, provider='', model=''):
         provider = provider or self.provider
@@ -205,38 +248,79 @@ class OpenCodeAgent(r.BaseJobExecutor):
         if '/' in model and not provider:
             provider, model = model.split('/', 1)
         if provider and model:
-            return {'providerID': provider, 'modelID': model}
+            return {'providerID': provider, 'id': model}
         return None
 
-    def prompt(self, session_id, text, provider='', model='', agent=None, system=None):
-        """ Sendet text an die Session und wartet auf die Antwort: {info, parts} """
-        body = {'parts': [{'type': 'text', 'text': text}]}
-        ref = self.model_ref(provider, model)
-        if ref:
-            body['model'] = ref
-        if agent:
-            body['agent'] = agent
-        if system:
-            body['system'] = system
-        return self.api(f'/session/{session_id}/message', body, timeout=self.timeout)
+    def prompt(self, session_id, text):
+        """ Stellt text in die Session ein (asynchron), liefert die ID der User-Nachricht """
+        return self.api(f'/api/session/{session_id}/prompt', {'text': text}).get('id')
+
+    def approve_permissions(self, session_id):
+        """ Offene Berechtigungsanfragen der Session erlauben """
+        for req in self.api(f'/api/session/{session_id}/permission') or []:
+            self.api(f"/api/session/{session_id}/permission/{req['id']}/reply", {'decision': 'once'})
+
+    def wait_idle(self, session_id, message_id, timeout=None, poll=2.0):
+        """
+            Wartet, bis die Session nach der Nachricht message_id fertig ist (idle-Nachricht)
+            :return: (outcome, error, text) mit den Antworttexten nach message_id
+        """
+        timeout = timeout or self.timeout
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                self.approve_permissions(session_id)
+            except Exception as e:
+                self.debug('Berechtigungen: ' + str(e))
+            msgs = self.messages(session_id, order='asc')
+            ids = [m.get('id') for m in msgs]
+            after = msgs[ids.index(message_id) + 1:] if message_id in ids else []
+            idle = [m for m in after if m.get('type') == 'idle']
+            if idle:
+                texts = [c.get('text', '') for m in after if m.get('type') == 'assistant'
+                         for c in m.get('content', []) if c.get('type') == 'text']
+                err = idle[-1].get('error') or {}
+                return idle[-1].get('outcome', 'succeeded'), err.get('message', ''), '\n'.join(texts).strip()
+            time.sleep(poll)
+        self.abort_session(session_id)
+        raise OpenCodeError(f'Zeitüberschreitung nach {timeout} s')
+
+    def run(self, session_id, text, timeout=None):
+        """ Prompt senden und auf das Ergebnis warten, liefert den Antworttext """
+        outcome, error, response = self.wait_idle(session_id, self.prompt(session_id, text), timeout)
+        if outcome != 'succeeded':
+            raise OpenCodeError(f'opencode {outcome}: {error}'.rstrip(': '))
+        return response
 
     @staticmethod
-    def text_of(parts):
-        return '\n'.join(p.get('text', '') for p in parts or [] if p.get('type') == 'text').strip()
-
-    @staticmethod
-    def summarize_parts(parts):
-        """ Kurzfassung der Parts für die UI: text, reasoning, tool (Name, Status, Titel) """
+    def summarize_messages(msgs):
+        """ Kurzfassung für die UI: [{role, parts: [{type: text|reasoning|tool|info, ...}]}] """
         res = []
-        for p in parts or []:
-            t = p.get('type')
-            if t in ('text', 'reasoning') and p.get('text'):
-                res.append({'type': t, 'text': p['text']})
-            elif t == 'tool':
-                state = p.get('state') or {}
-                res.append({'type': 'tool', 'tool': p.get('tool'), 'status': state.get('status'),
-                            'title': state.get('title') or json.dumps(state.get('input', {}))[:200],
-                            'error': state.get('error')})
+        for m in msgs or []:
+            t = m.get('type')
+            if t == 'assistant':
+                parts = []
+                for c in m.get('content', []):
+                    if c.get('type') in ('text', 'reasoning') and c.get('text'):
+                        parts.append({'type': c['type'], 'text': c['text']})
+                    elif c.get('type') == 'tool':
+                        state = c.get('state') or {}
+                        err = state.get('error') or {}
+                        parts.append({'type': 'tool', 'tool': c.get('name'), 'status': state.get('status'),
+                                      'title': json.dumps(state.get('input', {}), ensure_ascii=False)[:200],
+                                      'error': err.get('message') if isinstance(err, dict) else str(err)})
+                if m.get('error'):
+                    parts.append({'type': 'info', 'text': 'Fehler: ' + str(m['error'].get('message'))})
+                res.append({'role': 'assistant', 'parts': parts})
+            elif t in ('user', 'synthetic', 'system'):
+                res.append({'role': t, 'parts': [{'type': 'text', 'text': m.get('text', '')}]})
+            elif t == 'shell':
+                res.append({'role': 'shell', 'parts': [{'type': 'tool', 'tool': 'shell', 'status': m.get('status'),
+                                                        'title': m.get('command', ''), 'error': None}]})
+            elif t == 'idle':
+                err = m.get('error') or {}
+                res.append({'role': 'idle', 'parts': [{'type': 'info', 'text': 'fertig: ' + str(m.get('outcome'))
+                                                       + (' - ' + err.get('message', '') if err else '')}]})
         return res
 
     # -- Git --
@@ -287,15 +371,10 @@ class OpenCodeAgent(r.BaseJobExecutor):
                     self.git('checkout', '-b', branch)
                     log(f'Branch {branch} von {base_branch} angelegt')
                 issue['status'] = 'opencode arbeitet'
-                session = self.create_session(f"{branch}: {issue['task'][:60]}")
+                session = self.create_session(f"{branch}: {issue['task'][:60]}", issue['provider'], issue['model'])
                 issue['session_id'] = session['id']
                 log(f"Session {session['id']}, Modell {issue['provider'] or '-'}/{issue['model'] or 'Standard'}")
-                result = self.prompt(session['id'], issue['task'], issue['provider'], issue['model'])
-                info = result.get('info', {}) if isinstance(result, dict) else {}
-                issue['response'] = self.text_of(result.get('parts') if isinstance(result, dict) else [])
-                if info.get('error'):
-                    err = info['error']
-                    raise OpenCodeError('opencode: ' + str((err.get('data') or {}).get('message') or err.get('name') or err))
+                issue['response'] = self.run(session['id'], issue['task'])
                 log('opencode fertig')
                 issue['status'] = 'commit'
                 self.git('add', '-A')
@@ -357,7 +436,7 @@ class OpenCodeAgent(r.BaseJobExecutor):
                'project_path': self.project_path, 'bin': self.opencode_bin or '', 'provider': self.provider,
                'model': self.model, 'log': self.server_log[-30:]}
         try:
-            res['version'] = self.health().get('version', '')
+            res['version'] = self.server_info().get('version', '')
             res['online'] = True
         except Exception as e:
             res['error'] = str(e)
@@ -398,11 +477,17 @@ class OpenCodeAgent(r.BaseJobExecutor):
         return self.success('ok', issues=list(reversed(self.issues)))
 
     @op("Nachrichten einer Session (Kurzfassung)", result={'success': 'bool', 'messages': 'list'})
-    def session_messages(self, session_id: str, limit: int = 0):
+    def session_messages(self, session_id: str, limit: int = 200):
         try:
-            msgs = self.messages(session_id, limit or None)
-            return self.success('ok', messages=[{'role': m.get('info', {}).get('role'),
-                                                 'parts': self.summarize_parts(m.get('parts'))} for m in msgs])
+            msgs = list(reversed(self.messages(session_id, limit, order='desc')))
+            return self.success('ok', messages=self.summarize_messages(msgs))
+        except Exception as e:
+            return self.fail(str(e))
+
+    @op("Pairing-Link für die opencode-Web-UI (einmalig, kurzlebig)", result={'success': 'bool', 'url': 'str'})
+    def pairing(self):
+        try:
+            return self.success('ok', **self.pair())
         except Exception as e:
             return self.fail(str(e))
 
@@ -422,12 +507,11 @@ class OpenCodeAgent(r.BaseJobExecutor):
             return self.fail(str(e))
 
     @op("Einzelne Nachricht an eine (neue) Session, ohne Git", result={'success': 'bool', 'response': 'str'})
-    def ask(self, text: str, session_id: str = '', provider: str = '', model: str = ''):
+    def ask(self, text: str, session_id: str = ''):
         try:
             if not session_id:
                 session_id = self.create_session()['id']
-            result = self.prompt(session_id, text, provider, model)
-            return self.success('ok', response=self.text_of(result.get('parts')), session_id=session_id)
+            return self.success('ok', response=self.run(session_id, text), session_id=session_id)
         except Exception as e:
             return self.fail(str(e))
 
@@ -436,11 +520,10 @@ class OpenCodeAgent(r.BaseJobExecutor):
     PAGES = [('index', 'Issues'), ('server', 'Server')]
 
     def part_page(self, p: b.Page, name, html, js):
-        nav = ' '.join(f'<a href="{self.link(page)}" class="{"active" if page == name else ""}">{title}</a>'
-                       for page, title in self.PAGES)
+        p.nav(*[(title, self.link(page)) for page, title in self.PAGES], active=self.link(name))
         cfg = json.dumps({'type': self.type, 'provider': self.provider, 'model': self.model}).replace('</', '<\\/')
         p(f'<style>{OPENCODE_CSS}</style>')
-        p(f'<div class="oc"><nav class="oc-nav">{nav}</nav>{html}</div>')
+        p(f'<div class="oc">{html}</div>')
         p(f'<script>(function() {{\nconst OC = {cfg};\n{OPENCODE_JS}\n{js}\n}})();</script>')
 
     def part_index(self, p: b.Page, params={}):
@@ -452,10 +535,6 @@ class OpenCodeAgent(r.BaseJobExecutor):
 
 OPENCODE_CSS = """
 .oc { max-width: 1100px; }
-.oc-nav { display: flex; gap: 6px; margin: 8px 0 14px; flex-wrap: wrap; }
-.oc-nav a { padding: 6px 12px; border: 1px solid #999; border-radius: 16px; text-decoration: none; color: inherit;
-  opacity: .7; }
-.oc-nav a.active { opacity: 1; font-weight: bold; border-width: 2px; }
 .oc-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
 .oc-row > label:first-child { min-width: 110px; }
 .oc textarea { width: 100%; box-sizing: border-box; font: inherit; }
@@ -473,6 +552,7 @@ OPENCODE_CSS = """
 .oc-part { margin: 3px 0; font-size: 92%; }
 .oc-part.tool { opacity: .8; font-family: monospace; }
 .oc-part.reasoning { opacity: .6; font-style: italic; }
+.oc-part.info { font-size: 85%; opacity: .7; }
 .oc-table { border-collapse: collapse; }
 .oc-table td, .oc-table th { border: 1px solid #8886; padding: 3px 8px; text-align: left; }
 """
@@ -556,7 +636,7 @@ function statusClass(i) { return i.success === true ? 'ok' : (i.success === fals
 function renderParts(el, sid) {
   post({ op: 'session_messages', session_id: sid }).then((r) => {
     if (!r.success) { el.textContent = r.message; return; }
-    el.innerHTML = r.messages.filter((m) => m.role === 'assistant').map((m) => m.parts.map((p) => p.type === 'tool'
+    el.innerHTML = r.messages.filter((m) => m.role !== 'user').map((m) => m.parts.map((p) => p.type === 'tool'
       ? '<div class="oc-part tool">' + esc(p.tool) + ' [' + esc(p.status) + '] ' + esc(p.title) + (p.error ? ' - ' + esc(p.error) : '') + '</div>'
       : '<div class="oc-part ' + p.type + '">' + esc(p.text) + '</div>').join('')).join('<hr>');
   });
@@ -600,7 +680,7 @@ OPENCODE_SERVER_HTML = """
   <tr><th>opencode</th><td id="oc-bin"></td></tr>
 </table>
 <div class="oc-row"><button id="oc-start">Server starten</button><button id="oc-stop">Server stoppen</button>
-  <button id="oc-refresh">Aktualisieren</button></div>
+  <button id="oc-refresh">Aktualisieren</button><button id="oc-pair">Web-UI öffnen (Pairing)</button></div>
 <div class="oc-msg" id="oc-msg"></div>
 <details><summary>Server-Ausgabe</summary><pre id="oc-log"></pre></details>
 <h3>Sessions</h3>
@@ -632,5 +712,8 @@ function action(op) {
 $('oc-start').onclick = () => action('server_start');
 $('oc-stop').onclick = () => action('server_stop');
 $('oc-refresh').onclick = load;
+$('oc-pair').onclick = () => post({ op: 'pairing' }).then((r) => {
+  if (r.success) window.open(r.url, '_blank'); else msg('oc-msg', r.message, true);
+});
 load();
 """
