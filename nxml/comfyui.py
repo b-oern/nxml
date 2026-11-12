@@ -78,13 +78,13 @@ class ComfyUi(r.BaseJobExecutor):
             .r_success(value='int')
         self.define_sig(d.PStr('op', 'rest'), d.PStr('route', 'system_stats'))\
             .set_description("Ruft die ComfyUI-API auf (history, queue, system_stats, free), liefert deren JSON")
+        # r_success/r_fail liefern die Ergebnis-Class, nicht die Func -> nicht verketten
         f = self.define_sig(d.PStr('op', 'workflow_info'), d.Param('workflow'))\
             .set_description("Prompt-, Bild-, Seed- und Ausgabe-Nodes eines Workflows und was fuer die Ausfuehrung fehlt")
         f.r_success(api_format='bool', ready='bool', prompt='dict', text_nodes='list', images='list', seeds='list',
                     outputs='list', warnings='list')
         f.r_fail()
-        f = self.define_sig(d.PStr('op', 'workflow_prepare'), d.Param('workflow'), d.PStr('prompt_node', ''),
-                            d.PStr('save_as', ''))\
+        f = self.define_sig(d.PStr('op', 'workflow_prepare'), d.Param('workflow'), d.PStr('prompt_node', ''), d.PStr('save_as', ''))\
             .set_description("Markiert den Prompt-Node, setzt Titel (title.<Node-Id>) und speichert den Workflow")
         f.r_success(workflow='str', ready='bool', warnings='list')
         f.r_fail()
@@ -405,6 +405,39 @@ class ComfyUi(r.BaseJobExecutor):
         response.raise_for_status()
         return {'success': True}
 
+    def instance_workflow_dir(self):
+        """ :return: comfyui_path/user/default/workflows oder None, wenn comfyui_path fehlt bzw. es nicht existiert """
+        if not self.cfg.get('comfyui_path'):
+            return None
+        wf_dir = os.path.join(self.cfg['comfyui_path'], 'user', 'default', 'workflows')
+        return wf_dir if os.path.isdir(wf_dir) else None
+
+    def instance_workflows(self) -> list:
+        """
+         In der Instanz gespeicherte Workflows (ComfyUI: user/default/workflows).
+         Die offenen Tabs speichert das ComfyUI-Frontend nur im localStorage des Browsers, sie sind per API nicht abrufbar.
+
+         Ist comfyui_path konfiguriert, wird das Verzeichnis direkt gelesen, sonst die API der Instanz gefragt.
+
+         :return: [{path, size, modified}], size und modified fehlen bei aelteren ComfyUI-Versionen (API)
+        """
+        wf_dir = self.instance_workflow_dir()
+        if wf_dir is not None:
+            res = []
+            for file in Path(wf_dir).rglob('*.json'):
+                stat = file.stat()
+                res.append({'path': file.relative_to(wf_dir).as_posix(), 'file': str(file),
+                            'size': stat.st_size, 'modified': stat.st_mtime})
+            return sorted(res, key=lambda item: item['modified'], reverse=True)
+        response = requests.get(self.server_url + '/api/userdata',
+                                params={'dir': 'workflows', 'recurse': 'true', 'split': 'false', 'full_info': 'true'},
+                                timeout=10)
+        if response.status_code == 404:  # Verzeichnis existiert (noch) nicht
+            return []
+        response.raise_for_status()
+        res = [item if isinstance(item, dict) else {'path': item} for item in response.json()]
+        return sorted(res, key=lambda item: item.get('modified', 0), reverse=True)
+
     def wait_for_job(self, jobid):
         while True:
             res = self.history_job(jobid)
@@ -552,6 +585,8 @@ class ComfyUi(r.BaseJobExecutor):
                               hint="Anzahl der wartenden Prompts in der ComfyUI-Queue"))
             p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free'),
                               hint="Entlädt die Modelle und gibt RAM und VRAM des Servers frei"))
+            p(self.link_btn("Instanz", self.link(self.part_instance),
+                            hint="In der ComfyUI-Instanz gespeicherte Workflows (user/default/workflows)"))
         with p.section("Weitere"):
             p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt),
                       "Prompt direkt, als Jobdatei, über MongoDB oder verschlüsselt einreihen"),
@@ -562,6 +597,43 @@ class ComfyUi(r.BaseJobExecutor):
                   w.a("Image Transform", self.link(self.part_image_transform),
                       "Ein Bild in einen Workflow geben, direkt oder als Jobdatei")])
         p.pre('', id='result')
+
+    @staticmethod
+    def link_btn(title, href, hint=None) -> str:
+        """ Link im Stil der action_btn-Buttons """
+        attr = f' title="{html.escape(hint)}"' if hint else ''
+        return f'<button type="button"{attr} onclick="location.href={html.escape(json.dumps(href))};">' \
+               f'{html.escape(title)}</button>'
+
+    def part_instance(self, p: base.Page, params={}):
+        p.h1("ComfyUI-Instanz")
+        p.prop("Server", w.a(html.escape(self.server_url), self.server_url))
+        wf_dir = self.instance_workflow_dir()
+        p.prop("Quelle", html.escape(wf_dir) if wf_dir else "API der Instanz (comfyui_path nicht gesetzt)")
+        p.div("Offene Tabs speichert das ComfyUI-Frontend nur im Browser, angezeigt werden daher die in der "
+              "Instanz gespeicherten Workflows (user/default/workflows).", _class='muted')
+        try:
+            workflows = self.instance_workflows()
+        except requests.RequestException as e:
+            p.alert_warn("Instanz nicht erreichbar: " + html.escape(str(e)))
+            workflows = None
+        if workflows is not None:
+            with p.section(f"Workflows ({len(workflows)})"):
+                if len(workflows) == 0:
+                    p.div("Keine gespeicherten Workflows.")
+                else:
+                    p('<table class="comfyui_workflows"><tr><th>Workflow</th><th>Geändert</th><th>Größe</th></tr>')
+                    for item in workflows:
+                        path = str(item.get('path', ''))
+                        modified = item.get('modified')
+                        modified = time.strftime('%Y-%m-%d %H:%M', time.localtime(modified / 1000 if modified > 1e11 else modified)) \
+                            if isinstance(modified, (int, float)) else '-'
+                        size = item.get('size')
+                        size = f"{size / 1024:.1f} KB" if isinstance(size, (int, float)) else '-'
+                        p(f'<tr><td title="{html.escape(str(item.get("file", path)))}">{html.escape(path)}</td>'
+                          f'<td>{modified}</td><td>{size}</td></tr>')
+                    p('</table>')
+        p.div(w.a("Zurück", self.link(self.part_index)))
 
     def part_workflow_table(self, p: base.Page):
         if len(self.workflows()) == 0:
