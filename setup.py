@@ -29,6 +29,7 @@ if __name__ == '__main__':
                 'age = nxml.analyse:AgeAndGenderRunner',
                 'clip = nxml.analyse:ClipEmbeddings',
                 'textblob = nxml.analyse:TextBlobRunner',
+                'opencode = nxml.agents:OpenCodeAgent',
                 'librosa = nxml.audio:LibRosa',
                 'image_similarity = nxml.image:ImageSimilarity',
                 'speech_reg = nxml.audio:CommandRecognition',
