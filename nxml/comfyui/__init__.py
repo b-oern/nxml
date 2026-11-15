@@ -18,10 +18,14 @@ from enum import Enum
 
 from PIL import Image
 
+import urllib.parse
+
 from nwebclient import runner as r, base
 from nwebclient import util as u
 from nwebclient import dev as d
 from nwebclient import web as w
+
+from nxml.comfyui.ui import UiWorkflow, to_type, SEED_MAX
 
 
 class Position(Enum):
@@ -91,6 +95,23 @@ class ComfyUi(r.BaseJobExecutor):
         f = self.define_sig(d.PStr('op', 'workflow_upload'), d.Param('name'), d.Param('file_data'))\
             .set_description("Speichert einen Workflow (Base64-JSON) in workflow_dir")
         f.r_success(workflow='str')
+        f.r_fail()
+        f = self.define_sig(d.PStr('op', 'instance_run'), d.Param('workflow'), d.PInt('count', 1))\
+            .set_description("Startet einen in der Instanz gespeicherten Workflow (UI-Format), "
+                             "Parameter als p:<Node-Id>:<Name>, zufällige Seeds als r:<Node-Id>:<Name>")
+        f.r_success(prompt_ids='list', warnings='list')
+        f.r_fail()
+        f = self.define_sig(d.PStr('op', 'instance_list'))\
+            .set_description("In der Instanz gespeicherte Workflows (user/default/workflows)")
+        f.r_success(workflows='list')
+        f.r_fail()
+        f = self.define_sig(d.PStr('op', 'instance_params'), d.Param('workflow'))\
+            .set_description("Wichtige Parameter und Hinweise eines in der Instanz gespeicherten Workflows")
+        f.r_success(workflow='str', params='list', warnings='list')
+        f.r_fail()
+        f = self.define_sig(d.PStr('op', 'instance_status'), d.Param('prompt_ids'))\
+            .set_description("Status von Prompts (Liste oder Komma-getrennt): done, error, running, queued, unknown")
+        f.r_success(prompts='dict')
         f.r_fail()
         self.define_sig(d.PStr('op', 'workflow'), d.Param('workflow', 'dict'), d.PInt('count', 1))\
             .set_description("Sendet einen fertigen Workflow (API-Format) an ComfyUI").r_success(result='dict')
@@ -438,6 +459,123 @@ class ComfyUi(r.BaseJobExecutor):
         res = [item if isinstance(item, dict) else {'path': item} for item in response.json()]
         return sorted(res, key=lambda item: item.get('modified', 0), reverse=True)
 
+    def load_instance_workflow(self, path: str) -> dict:
+        """ :param path: Pfad relativ zu user/default/workflows, wie ihn instance_workflows liefert """
+        wf_dir = self.instance_workflow_dir()
+        if wf_dir is not None:
+            base_dir = Path(wf_dir).resolve()
+            file = (base_dir / path).resolve()
+            if base_dir not in file.parents:
+                raise ValueError(f"{path} liegt nicht im Workflow-Verzeichnis")
+            return self.load_workflow(file)
+        response = requests.get(self.server_url + '/api/userdata/' + urllib.parse.quote('workflows/' + path, safe=''),
+                                timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def object_info(self) -> dict:
+        """ Node-Definitionen der Instanz, 5 Minuten zwischengespeichert """
+        cached = getattr(self, '_object_info', None)
+        if cached is None or time.time() - cached[0] > 300:
+            response = requests.get(self.server_url + '/object_info', timeout=30)
+            response.raise_for_status()
+            cached = (time.time(), response.json())
+            self._object_info = cached
+        return cached[1]
+
+    def instance_converter(self, path: str, data: dict = None) -> UiWorkflow:
+        """
+         :param data: p:<Node-Id>:<Name> setzt einen Parameter, r:<Node-Id>:<Name> (True) einen zufaelligen Seed
+        """
+        workflow = self.load_instance_workflow(path)
+        if not UiWorkflow.is_ui_format(workflow):
+            raise ValueError("Kein Workflow im UI-Format (nodes fehlt)")
+        conv = UiWorkflow(workflow, self.object_info())
+        if data:
+            params = {(prm['node'], prm['name']): prm for prm in conv.params()}
+            for key, value in data.items():
+                parts = key.split(':', 2)
+                if len(parts) != 3 or parts[0] != 'p' or (parts[1], parts[2]) not in params:
+                    continue
+                prm = params[(parts[1], parts[2])]
+                rnd = data.get(f'r:{parts[1]}:{parts[2]}')
+                if prm['seed'] and rnd is not None and to_type(rnd, 'BOOLEAN'):
+                    value = random.randint(0, int(min(SEED_MAX, prm['options'].get('max', SEED_MAX))))
+                conv.set_param(parts[1], parts[2], to_type(value, prm['type']))
+                if prm['seed'] and rnd is not None:
+                    conv.set_control(parts[1], parts[2], 'randomize' if to_type(rnd, 'BOOLEAN') else 'fixed')
+        return conv
+
+    def execute_instance_run(self, data):
+        path = data.get('workflow')
+        if not path:
+            return self.fail("workflow fehlt")
+        try:
+            count = max(1, int(data.get('count') or 1))
+        except ValueError:
+            return self.fail("count ist keine Zahl")
+        prompt_ids, warnings = [], []
+        try:
+            for i in range(count):
+                conv = self.instance_converter(path, data)  # je Durchlauf neu, damit Seeds neu gewuerfelt werden
+                api = conv.to_api()
+                warnings = conv.validate(api)
+                response = requests.post(self.server_url + '/prompt', timeout=30, json={
+                    'prompt': api, 'extra_data': {'extra_pnginfo': {'workflow': conv.workflow}}})
+                if response.status_code == 400:
+                    err = response.json()
+                    return self.fail(err.get('error', {}).get('message', 'Fehler') + ': ' +
+                                     json.dumps(err.get('node_errors', {}), ensure_ascii=False)[:2000])
+                response.raise_for_status()
+                prompt_ids.append(response.json().get('prompt_id'))
+        except (OSError, ValueError, requests.RequestException) as e:
+            return self.fail(str(e))
+        return self.success(f"{len(prompt_ids)} Prompt(s) gestartet", prompt_ids=prompt_ids, warnings=warnings)
+
+    def execute_instance_list(self, data={}):
+        try:
+            workflows = [{k: v for k, v in item.items() if k != 'file'} for item in self.instance_workflows()]
+        except (OSError, requests.RequestException) as e:
+            return self.fail(str(e))
+        return self.success(f"{len(workflows)} Workflow(s)", workflows=workflows)
+
+    def execute_instance_params(self, data):
+        path = data.get('workflow')
+        if not path:
+            return self.fail("workflow fehlt")
+        try:
+            conv = self.instance_converter(path)
+            warnings = conv.validate(conv.to_api(randomize=False))
+        except (OSError, ValueError, requests.RequestException) as e:
+            return self.fail(str(e))
+        return self.success(workflow=path, params=conv.params(), warnings=warnings)
+
+    def prompt_status(self, prompt_id: str, queue: dict) -> dict:
+        """ :return: {status: done|error|running|queued|unknown, outputs: [Dateinamen], message} """
+        history = self.history_job(prompt_id).get(prompt_id)
+        if history:
+            status = history.get('status', {})
+            outputs = [img.get('filename') for out in history.get('outputs', {}).values()
+                       for img in out.get('images', []) + out.get('gifs', []) if isinstance(img, dict)]
+            messages = [m[1].get('exception_message') for m in status.get('messages', [])
+                        if isinstance(m, list) and len(m) > 1 and m[0] == 'execution_error' and isinstance(m[1], dict)]
+            ok = status.get('status_str', 'success') == 'success'
+            return {'status': 'done' if ok else 'error', 'outputs': outputs, 'message': '; '.join(filter(None, messages))}
+        for key, status in (('queue_running', 'running'), ('queue_pending', 'queued')):
+            if any(isinstance(item, list) and len(item) > 1 and item[1] == prompt_id for item in queue.get(key, [])):
+                return {'status': status, 'outputs': [], 'message': ''}
+        return {'status': 'unknown', 'outputs': [], 'message': 'weder in der Queue noch in der History'}
+
+    def execute_instance_status(self, data):
+        ids = data.get('prompt_ids') or []
+        if isinstance(ids, str):
+            ids = [i.strip() for i in ids.split(',') if i.strip()]
+        try:
+            queue = self.queue()
+            return self.success(prompts={pid: self.prompt_status(pid, queue) for pid in ids})
+        except (ValueError, requests.RequestException) as e:
+            return self.fail(str(e))
+
     def wait_for_job(self, jobid):
         while True:
             res = self.history_job(jobid)
@@ -605,6 +743,113 @@ class ComfyUi(r.BaseJobExecutor):
         return f'<button type="button"{attr} onclick="location.href={html.escape(json.dumps(href))};">' \
                f'{html.escape(title)}</button>'
 
+    ASSET_KINDS = {'output': "Ausgaben", 'input': "Eingaben"}
+    IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.gif')
+    VIDEO_EXTS = ('.mp4', '.webm', '.mov')
+
+    def instance_assets(self, kind='output', limit=200, offset=0) -> dict:
+        """
+         Assets der Instanz ueber deren API, neueste zuerst: /api/assets (Tag output bzw. input), ist die Assets-API
+         nicht aktiv (ComfyUI ohne --enable-assets), /internal/files/<kind> (nur Pfade, ohne Groesse und Datum).
+
+         :return: {items: [{id, path, filename, subfolder, size, modified, mime_type}], total, has_more, api}
+        """
+        if kind not in self.ASSET_KINDS:
+            raise ValueError(f"Unbekannte Art {kind}")
+        response = requests.get(self.server_url + '/api/assets', timeout=15, params={
+            'include_tags': kind, 'sort': 'created_at', 'order': 'desc', 'limit': limit, 'offset': offset})
+        if response.ok:
+            data = response.json()
+            items = []
+            for asset in data.get('assets', []):
+                name = str(asset.get('name', ''))
+                items.append({'id': asset.get('id'), 'path': name, 'filename': name.rsplit('/', 1)[-1],
+                              'subfolder': '', 'size': asset.get('size'), 'mime_type': asset.get('mime_type'),
+                              'modified': self.parse_iso(asset.get('created_at'))})
+            return {'items': items, 'total': data.get('total'), 'has_more': bool(data.get('has_more')),
+                    'api': '/api/assets'}
+        if response.status_code not in (404, 405, 501, 503):
+            response.raise_for_status()
+        response = requests.get(f"{self.server_url}/internal/files/{kind}", timeout=15)
+        response.raise_for_status()
+        items = []
+        for entry in response.json():
+            path = str(entry.get('name', entry.get('path', '')) if isinstance(entry, dict) else entry).replace('\\', '/')
+            subfolder, _, filename = path.rpartition('/')
+            items.append({'id': None, 'path': path, 'filename': filename, 'subfolder': subfolder, 'size': None,
+                          'mime_type': None, 'modified': None})
+        return {'items': items[offset:offset + limit], 'total': len(items), 'has_more': len(items) > offset + limit,
+                'api': f'/internal/files/{kind}'}
+
+    @staticmethod
+    def parse_iso(value):
+        """ ISO-Zeitstempel der Assets-API als Unix-Zeit oder None """
+        if not value:
+            return None
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            return None
+
+    def asset_url(self, item: dict, kind: str) -> str:
+        """ URL der Datei auf der ComfyUI-Instanz (muss vom Browser erreichbar sein) """
+        if item.get('id'):
+            return f"{self.server_url}/api/assets/{urllib.parse.quote(str(item['id']))}/content"
+        return self.server_url + '/view?' + urllib.parse.urlencode(
+            {'filename': item['filename'], 'subfolder': item['subfolder'], 'type': kind})
+
+    def part_instance_assets(self, p: base.Page, params={}):
+        kind = params.get('t', 'output')
+        if kind not in self.ASSET_KINDS:
+            kind = 'output'
+        try:
+            limit = max(1, int(params.get('limit', 200)))
+        except ValueError:
+            limit = 200
+        p.h1("ComfyUI-Assets: " + self.ASSET_KINDS[kind])
+        p.div(' | '.join(w.a(title, self.link(self.part_instance_assets, t=k)) if k != kind else f'<b>{title}</b>'
+                         for k, title in self.ASSET_KINDS.items()) + ' | ' +
+              w.a("Zurück zur Instanz", self.link(self.part_instance)))
+        try:
+            result = self.instance_assets(kind, limit)
+        except (ValueError, requests.RequestException) as e:
+            p.alert_warn("Assets nicht verfügbar: " + html.escape(str(e)))
+            return
+        p.prop("Quelle", html.escape(self.server_url + result['api']))
+        if result['total'] is not None:
+            p.prop("Anzahl", f"{len(result['items'])} von {result['total']}")
+        more = result['has_more']
+        assets = result['items']
+        if len(assets) == 0:
+            p.div("Keine Dateien.")
+            return
+        p('<div class="comfyui_assets" style="display: flex; flex-wrap: wrap; gap: 8px;">')
+        for item in assets:
+            url = html.escape(self.asset_url(item, kind), quote=True)
+            name = html.escape(item['path'])
+            ext = os.path.splitext(item['filename'])[1].lower()
+            mime = str(item.get('mime_type') or '')
+            if ext in self.IMAGE_EXTS or mime.startswith('image/'):
+                media = f'<img src="{url}" loading="lazy" alt="{name}" style="max-width: 100%; max-height: 160px;">'
+            elif ext in self.VIDEO_EXTS or mime.startswith('video/'):
+                media = f'<video src="{url}" preload="metadata" muted controls style="max-width: 100%; max-height: 160px;"></video>'
+            else:
+                media = f'<div style="padding: 60px 0; text-align: center;">{html.escape(ext or "Datei")}</div>'
+            info = []
+            if isinstance(item.get('modified'), (int, float)):
+                info.append(time.strftime('%Y-%m-%d %H:%M', time.localtime(item['modified'])))
+            if isinstance(item.get('size'), (int, float)):
+                info.append(f"{item['size'] / 1024:.0f} KB")
+            p(f'<div style="width: 180px; overflow: hidden;" title="{name}">'
+              f'<a href="{url}" target="_blank">{media}</a>'
+              f'<div style="font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{name}</div>'
+              f'<div class="muted" style="font-size: 11px;">{" · ".join(info)}</div></div>')
+        p('</div>')
+        if more:
+            p.div(w.a("Mehr anzeigen", self.link(self.part_instance_assets, t=kind, limit=limit * 2),
+                      f"Die neuesten {limit * 2} Dateien anzeigen"))
+
     def part_instance(self, p: base.Page, params={}):
         p.h1("ComfyUI-Instanz")
         p.prop("Server", w.a(html.escape(self.server_url), self.server_url))
@@ -612,6 +857,8 @@ class ComfyUi(r.BaseJobExecutor):
         p.prop("Quelle", html.escape(wf_dir) if wf_dir else "API der Instanz (comfyui_path nicht gesetzt)")
         p.div("Offene Tabs speichert das ComfyUI-Frontend nur im Browser, angezeigt werden daher die in der "
               "Instanz gespeicherten Workflows (user/default/workflows).", _class='muted')
+        p(self.link_btn("Assets", self.link(self.part_instance_assets),
+                        hint="Ausgaben und Eingaben der ComfyUI-Instanz (output, input)"))
         try:
             workflows = self.instance_workflows()
         except requests.RequestException as e:
@@ -630,10 +877,84 @@ class ComfyUi(r.BaseJobExecutor):
                             if isinstance(modified, (int, float)) else '-'
                         size = item.get('size')
                         size = f"{size / 1024:.1f} KB" if isinstance(size, (int, float)) else '-'
-                        p(f'<tr><td title="{html.escape(str(item.get("file", path)))}">{html.escape(path)}</td>'
+                        link = w.a(html.escape(path), self.link_workflow(self.part_instance_workflow, path),
+                                   "Parameter einstellen und ausführen")
+                        p(f'<tr><td title="{html.escape(str(item.get("file", path)))}">{link}</td>'
                           f'<td>{modified}</td><td>{size}</td></tr>')
                     p('</table>')
         p.div(w.a("Zurück", self.link(self.part_index)))
+
+    @staticmethod
+    def part_param_input(p: base.Page, prm: dict, hid: str):
+        """ Eingabefeld fuer einen Parameter aus UiWorkflow.params() """
+        hint = prm['options'].get('tooltip') or f"{prm['group']}: {prm['name']} ({prm['type']})"
+        value = prm['value']
+        if prm['type'] == 'COMBO' and prm['choices']:
+            choices = prm['choices'] if value in prm['choices'] else [value, *prm['choices']]
+            p.form_select(hid, prm['label'], [str(c) for c in choices], str(value), id=hid, hint=hint)
+        elif prm['type'] == 'BOOLEAN':
+            checked = ' checked' if value else ''
+            p.form_elem(f'<input type="checkbox" id="{hid}"{checked}>', prm['label'], hint=hint)
+        elif prm['type'] in ('INT', 'FLOAT'):
+            attrs = ''.join(f' {k}="{html.escape(str(prm["options"][k]))}"' for k in ('min', 'max', 'step')
+                            if k in prm['options'])
+            if prm['type'] == 'FLOAT' and 'step' not in prm['options']:
+                attrs += ' step="any"'
+            field = f'<input type="number" id="{hid}" value="{html.escape(str(value))}"{attrs}>'
+            if prm['seed']:
+                checked = ' checked' if prm['randomize'] else ''
+                field += f' <label title="Bei jedem Lauf einen zufälligen Seed verwenden">' \
+                         f'<input type="checkbox" id="{hid}_rnd"{checked}> zufällig</label>'
+            p.form_elem(field, prm['label'], hint=hint)
+        elif prm['options'].get('multiline') or len(str(value)) > 60 or '\n' in str(value):
+            p.form_elem(f'<textarea id="{hid}" rows="5" style="width: 100%; max-width: 800px;">'
+                        f'{html.escape(str(value))}</textarea>', prm['label'], hint=hint)
+        else:
+            p.form_input(hid, prm['label'], id=hid, value=html.escape(str(value), quote=True),
+                         style='width: 100%; max-width: 600px;', hint=hint)
+
+    def part_instance_workflow(self, p: base.Page, params={}):
+        path = params.get('w', '')
+        p.h1("Workflow: " + html.escape(path))
+        p.div(w.a("Zurück zur Instanz", self.link(self.part_instance)))
+        try:
+            conv = self.instance_converter(path)
+            warnings = conv.validate(conv.to_api(randomize=False))
+        except (OSError, ValueError, requests.RequestException) as e:
+            p.alert_error(f"{html.escape(path)} kann nicht geladen werden: {html.escape(str(e))}")
+            return
+        for msg in warnings:
+            p.alert_warn(html.escape(msg))
+        self.part_params_form(p, self, conv.params(), dict(type=self.type, op='instance_run', workflow=path),
+                              "Workflow mit diesen Parametern in die Queue der ComfyUI-Instanz stellen")
+        p.pre('', id='result')
+
+    @classmethod
+    def part_params_form(cls, p: base.Page, runner: r.BaseJobExecutor, prms: list, job: dict, run_hint: str,
+                         on_success='null'):
+        """
+         Formular fuer die Parameter aus UiWorkflow.params() mit Anzahl und Run-Button (auch fuer ComfyRemote)
+
+         :param job: Basis des Jobs, die Parameter kommen als p:<Node-Id>:<Name> bzw. r:... (zufaelliger Seed) dazu
+        """
+        job = dict(job, count='#count')
+        groups = {}
+        for prm in prms:
+            groups.setdefault(prm['group'], []).append(prm)
+        if len(groups) == 0:
+            p.div("Keine wichtigen Parameter gefunden, der Workflow läuft mit den gespeicherten Werten.")
+        for group, items in groups.items():
+            with p.section(html.escape(str(group))):
+                for prm in items:
+                    hid = cls.html_id('p', f"{prm['node']}_{prm['name']}")
+                    cls.part_param_input(p, prm, hid)
+                    job[f"p:{prm['node']}:{prm['name']}"] = '#' + hid
+                    if prm['seed']:
+                        job[f"r:{prm['node']}:{prm['name']}"] = '#' + hid + '_rnd'
+        with p.section("Ausführen"):
+            p.form_input('count', "Anzahl", id='count', type='number', value='1', min='1',
+                         hint="So oft wird der Workflow in die Queue der Instanz gestellt")
+            p.form_elem(runner.action_btn_parametric("Run", job, on_success, hint=run_hint))
 
     def part_workflow_table(self, p: base.Page):
         if len(self.workflows()) == 0:

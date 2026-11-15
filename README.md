@@ -35,6 +35,38 @@ Ergebnis ist eine Tabelle mit Zeit, Wert und erkanntem Text, Export als CSV oder
 Optionen: `number_only` (nur die erste Zahl als Wert), `decimals` (feste Nachkommastellen, falls die OCR den Dezimalpunkt nicht erkennt: 2 macht aus `12 50` den Wert `12.50`), `invert` (helle Schrift auf dunkler Anzeige), `psm` (Tesseract, 7 = eine Zeile).
 Braucht OpenCV (`pip install opencv-python-headless`) oder ffmpeg.
 
+## SLAM
+
+`slam` (`nxml.vision.slam:SlamRunner`) bestimmt aus einem Kamerabild die Position der Kamera und baut eine Weltkarte (Punktwolke) auf, ähnlich wie ARCore, aber nur mit dem Bild.
+Quelle: Videodatei, Stream-URL (MJPEG über HTTP, JPEG-Snapshot-URL, RTSP/HLS über FFmpeg) oder Webcam-Index (`0`).
+UI unter `/pysys/runner?type=slam`: Quelle wählen oder Video hochladen, Kamerabild mit verfolgten Punkten, Radar um die Kamera (Blickrichtung oben) und Karte von oben mit der Bewegung der Kamera als Linie.
+
+ - Backend `opencv` (Standard für Streams): eingebaute monokulare Visual Odometry, live, braucht nur `opencv-python-headless` und `numpy`
+ - Backend `stella`: [stella_vslam](https://github.com/stella-cv/stella_vslam) `run_video_slam` als Subprozess, nur Videodateien, Ergebnis nach dem Durchlauf (`stella_bin`, `stella_vocab`, `stella_viewer`, `stella_args`; das ORB-Vokabular wird bei Bedarf geladen, für die Karte `pip install msgpack`)
+
+Der Button `QR` unter der Quelle zeigt einen QR-Code `nx://stream?media=video&to=<url>` für die nx-App (Ziel editierbar, bei Aufruf über localhost wird die Netz-IP eingesetzt, braucht `pip install qrcode`).
+Das Ziel `op=start_from_stream` nimmt entweder die Stream-URL des Handys (`source`/`stream`/`url`), einzelne Bilder (`image` als Base64-JPEG) oder legt eine Session an und liefert `push_url` (`/pysys/dispatcher?type=slam&slam=push&session=...`), an die JPEGs oder ein fortlaufender MJPEG-Strom per POST gehen.
+
+Events: `slam_pose` (je Bild: `x`, `y`, `z`, Quaternion, `yaw`, `pitch`, `roll`, `frame`, `t`), `slam_state` (`init`, `tracking`, `lost`), `slam_done`.
+Jobs (`op=...`): `start` (`source`, `backend`, `fov`, `width`, `frame_skip`, `realtime`, Kalibrierung `fx fy cx cy k1 k2 p1 p2 k3`), `stop`, `state`, `pose`, `sessions`, `upload`, `export` (`ply`, `csv`, `json`).
+Arbeitsverzeichnis `work_dir`, Standard `/tmp/nxml_slam` (je Lauf `sessions/<id>/` mit `trajectory.csv`, `points.ply`, `session.json`).
+Monokular ist der Maßstab unbekannt (erste Bewegung = 1), Koordinaten: Ursprung = erste Kameraposition, x rechts, y unten, z vorwärts.
+
+```
+slam: nxml.vision.slam:SlamRunner(fov=70, width=640)
+```
+
+## Punktwolken
+
+`pointcloud` (`nxml.vision.pointcloud:PointCloudRunner`) zeigt Punktwolken im Browser an (three.js aus `/static/js/three/three.module.min.js` und `controls/OrbitControls.js`, änderbar mit `three_url`/`orbit_url`).
+Quellen: PLY (ascii und binär), XYZ/TXT/CSV (`x y z [r g b]`) als Upload oder Pfad auf dem Server, sowie die Karte eines SLAM-Laufs, auch live. Im SLAM-Runner öffnet der Link `3D-Ansicht` den gewählten Lauf (`/pysys/dispatcher?type=pointcloud&slam=<session>`).
+Ansicht: drehen, verschieben, zoomen, Doppelklick setzt das Drehzentrum, Farben nach RGB/Höhe/einfarbig, Punktgröße, Höhenfilter mit `Boden ausblenden`, Kamerabahn, OpenCV-Achsen (y nach unten) umdrehen. Große Wolken werden auf `max_points` Punkte reduziert (Standard 1 Mio.).
+Arbeitsverzeichnis `work_dir`, Standard `/tmp/nxml_pointcloud`.
+
+```
+pointcloud: nxml.vision.pointcloud:PointCloudRunner
+```
+
 ## LM Studio
 
 `lmstudio` (`nxml.llm:LMStudio`) nutzt einen lokalen [LM-Studio](https://lmstudio.ai)-Server (Standard `http://localhost:1234`).

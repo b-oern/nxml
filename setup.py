@@ -15,7 +15,7 @@ if __name__ == '__main__':
         long_description=long_description,
         long_description_content_type="text/markdown",
         url="https://bsnx.net/4.0/group/pynwebclient",
-        packages=['nxml', 'nxml.video', 'nxml.remote'],
+        packages=['nxml', 'nxml.video', 'nxml.remote', 'nxml.comfyui', 'nxml.vision'],
         package_data={'nxml': ['docker/*']},
         include_package_data=True,
         entry_points={
@@ -65,7 +65,9 @@ if __name__ == '__main__':
                 'tts = nxml.audio:ElevenLabs',
                 'qtts = nxml.tts:Qwen3TTS',
                 'pipertts = nxml.audio:PiperTTS',
-                'face_similarity = nxml.vision:FaceSimilarity',
+                'face_similarity = nxml.vision.face:FaceSimilarity',
+                'slam = nxml.vision.slam:SlamRunner',
+                'pointcloud = nxml.vision.pointcloud:PointCloudRunner',
                 'comfyui = nxml.comfyui:ComfyUi',
                 'imap = nxml.data:Imap'
             ]
