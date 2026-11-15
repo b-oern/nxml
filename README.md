@@ -47,8 +47,13 @@ UI unter `/pysys/runner?type=slam`: Quelle wählen oder Video hochladen, Kamerab
 Der Button `QR` unter der Quelle zeigt einen QR-Code `nx://stream?media=video&to=<url>` für die nx-App (Ziel editierbar, bei Aufruf über localhost wird die Netz-IP eingesetzt, braucht `pip install qrcode`).
 Das Ziel `op=start_from_stream` nimmt entweder die Stream-URL des Handys (`source`/`stream`/`url`), einzelne Bilder (`image` als Base64-JPEG) oder legt eine Session an und liefert `push_url` (`/pysys/dispatcher?type=slam&slam=push&session=...`), an die JPEGs oder ein fortlaufender MJPEG-Strom per POST gehen.
 
-Events: `slam_pose` (je Bild: `x`, `y`, `z`, Quaternion, `yaw`, `pitch`, `roll`, `frame`, `t`), `slam_state` (`init`, `tracking`, `lost`), `slam_done`.
-Jobs (`op=...`): `start` (`source`, `backend`, `fov`, `width`, `frame_skip`, `realtime`, Kalibrierung `fx fy cx cy k1 k2 p1 p2 k3`), `stop`, `state`, `pose`, `sessions`, `upload`, `export` (`ply`, `csv`, `json`).
+Seiten (Navigation oben): `Main`, `Drive Radar`, `Einstellungen`.
+
+ - Drive Radar: Kuchenausschnitt vor der Kamera (Öffnungswinkel, Reichweite). Punkte unterhalb der Kamerahöhe (+ `Untergrenze` n Einheiten) und oberhalb des Sichtwinkels nach oben (Standard 45°) werden ignoriert. Bis zur `Prüfdistanz` gelten Punkte als im Weg, bei mehr als `erlaubte Punkte` zeigt die Statusanzeige „Hindernis“, sonst „Weg frei“. Abfrage per `op=drive`, bei Änderung Event `slam_path`.
+ - Einstellungen: Backend, FOV, Breite, Event-Rate, Push-Timeout und Drive-Radar-Werte, gespeichert in `work_dir/settings.json` (überschreiben die Werte aus der Konfiguration). Aktion `Tmp-Ordner leeren` löscht beendete Läufe und Uploads, laufende Läufe, Einstellungen und das ORB-Vokabular bleiben.
+
+Events: `slam_pose` (je Bild: `x`, `y`, `z`, Quaternion, `yaw`, `pitch`, `roll`, `frame`, `t`), `slam_state` (`init`, `tracking`, `lost`), `slam_path` (`free`, `count`, `nearest`), `slam_done`.
+Jobs (`op=...`): `start` (`source`, `backend`, `fov`, `width`, `frame_skip`, `realtime`, Kalibrierung `fx fy cx cy k1 k2 p1 p2 k3`), `stop`, `state`, `pose`, `sessions`, `upload`, `export` (`ply`, `csv`, `json`), `drive`, `settings` (`drive_angle`, `drive_range`, `drive_check`, `drive_lower`, `drive_up_angle`, `drive_threshold`, ...), `clear_tmp`.
 Arbeitsverzeichnis `work_dir`, Standard `/tmp/nxml_slam` (je Lauf `sessions/<id>/` mit `trajectory.csv`, `points.ply`, `session.json`).
 Monokular ist der Maßstab unbekannt (erste Bewegung = 1), Koordinaten: Ursprung = erste Kameraposition, x rechts, y unten, z vorwärts.
 

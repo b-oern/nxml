@@ -59,6 +59,20 @@ STELLA_VOCAB_URL = 'https://github.com/stella-cv/FBoW_orb_vocab/raw/main/orb_voc
 
 STREAM_RE = re.compile(r'^(https?|rtsp|rtsps|rtmp|udp|tcp|srt)://', re.I)
 
+# Drive Radar: Kuchenausschnitt vor der Kamera, Einheiten wie die Karte (erste Bewegung = 1)
+DRIVE_DEFAULTS = {
+    'angle': 90.0,      # Öffnungswinkel des Ausschnitts in Grad
+    'range': 5.0,       # Reichweite der Anzeige
+    'check': 2.0,       # Prüfdistanz: Punkte bis zu dieser Entfernung sind "im Weg"
+    'lower': 0.0,       # Untergrenze über der Kamerahöhe (Punkte darunter werden ignoriert)
+    'up_angle': 45.0,   # nach oben nur bis zu diesem Sichtwinkel
+    'threshold': 5,     # so viele Punkte dürfen im Weg sein, ohne dass der Weg blockiert ist
+    'events': True,     # Event slam_path bei Änderung auslösen
+}
+
+# Einstellungen, die die Seite Einstellungen ändern kann (Typ zum Umwandeln)
+GENERAL_SETTINGS = {'backend': str, 'fov': float, 'width': int, 'event_every': int, 'push_timeout': float}
+
 
 # -- Mathematik --
 
@@ -729,6 +743,26 @@ class SlamSession:
         if len(self.poses) % every == 0:
             self.owner.emit_event('slam_pose', session=self.id, tracking=self.tracking, points=len(self.points),
                                   **pose)
+        if self.owner.drive.get('events') and len(self.poses) % 5 == 0:
+            try:
+                self.owner.drive_check(self)
+            except Exception as e:
+                self.log.append(f'Drive-Prüfung: {e}')
+
+    def points_array(self):
+        """ Kartenpunkte als numpy (N,3), neue Punkte werden angehängt statt alles neu umzuwandeln """
+        with self.lock:
+            pts = self.points
+            n = len(pts)
+            arr = getattr(self, '_arr', None)
+            if arr is None or getattr(self, '_arr_src', None) is not pts or len(arr) > n:
+                arr = np.zeros((0, 3))  # Liste wurde ersetzt (z.B. stella), neu aufbauen
+                self._arr_src = pts
+            if len(arr) < n:
+                new = np.array([p[:3] for p in pts[len(arr):n]], np.float64).reshape(-1, 3)
+                arr = np.vstack([arr, new])
+            self._arr = arr
+            return arr
 
     def set_tracking(self, state):
         if state != self.tracking:
@@ -1129,6 +1163,11 @@ class SlamRunner(r.BaseJobExecutor):
         self.pointcloud_type = pointcloud_type
         self.sessions = {}
         self._vocab_lock = threading.Lock()
+        self.drive = dict(DRIVE_DEFAULTS)
+        self._drive_free = {}  # session -> letzter Zustand, slam_path nur bei Änderung
+        self.load_settings()
+        self.define_event('slam_path', {'session': 'ID', 'free': 'Weg frei (bool)', 'count': 'Punkte im Weg',
+                                        'threshold': 'erlaubte Punkte', 'check': 'Prüfdistanz'})
         self.define_event('slam_pose', {
             'session': 'ID des Laufs', 'frame': 'Bildnummer', 't': 'Zeit in s (Video) bzw. seit Start (Stream)',
             'x': 'Position rechts', 'y': 'Position unten', 'z': 'Position vorwärts',
@@ -1164,6 +1203,17 @@ class SlamRunner(r.BaseJobExecutor):
             .set_description("Video (Base64) ins Arbeitsverzeichnis, liefert path für start").r(success='bool', path='str')
         self.define_sig(d.PStr('op', 'export'), d.PStr('session', ''), d.PStr('format', 'ply'))\
             .set_description("Karte als ply, Trajektorie als csv oder alles als json").r(success='bool', content='str')
+        self.define_sig(d.PStr('op', 'drive'), d.PStr('session', ''), d.PInt('points', 1))\
+            .set_description("Drive Radar: ist der Weg vor der Kamera frei? count = Punkte im Weg, points = "
+                             "[seitlich, vorwärts, Höhe, im Weg] im Ausschnitt")\
+            .r(success='bool', free='bool', count='int', visible='int', points='list')
+        self.define_sig(d.PStr('op', 'settings'))\
+            .set_description("Einstellungen lesen; mit fov, width, backend, event_every, push_timeout, drive_angle, "
+                             "drive_range, drive_check, drive_lower, drive_up_angle, drive_threshold, drive_events "
+                             "ändern und speichern").r(success='bool', settings='dict')
+        self.define_sig(d.PStr('op', 'clear_tmp'))\
+            .set_description("Tmp-Ordner leeren: beendete Läufe und Uploads löschen, laufende bleiben")\
+            .r(success='bool', removed='int', freed='int')
 
     # Hilfen
 
@@ -1398,6 +1448,181 @@ class SlamRunner(r.BaseJobExecutor):
 
     # Web
 
+    # -- Einstellungen (work_dir/settings.json, überschreiben die Konstruktor-Werte) --
+
+    def settings_path(self):
+        return os.path.join(self.work_dir, 'settings.json')
+
+    def load_settings(self):
+        try:
+            with open(self.settings_path()) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        self.apply_settings(data)
+
+    def apply_settings(self, data):
+        """
+        Übernimmt bekannte Werte aus data (allgemein und drive_<key>), unbekannte werden ignoriert.
+        Erst werden alle Werte geprüft, bei einem ungültigen Wert (ValueError) bleibt alles unverändert.
+        """
+        general = {}
+        for key, typ in GENERAL_SETTINGS.items():
+            if key in data and str(data[key]).strip() != '':
+                general[key] = typ(float(data[key])) if typ is int else typ(data[key])
+        drive_in = data.get('drive', {}) if isinstance(data.get('drive'), dict) else {}
+        drive_in = {**drive_in, **{k[6:]: v for k, v in data.items() if k.startswith('drive_')}}
+        drive = {}
+        for key, default in DRIVE_DEFAULTS.items():
+            if key in drive_in and str(drive_in[key]).strip() != '':
+                value = drive_in[key]
+                if isinstance(default, bool):
+                    drive[key] = str(value).lower() in ('1', 'true', 'on', 'yes')
+                else:
+                    drive[key] = type(default)(float(value))
+        for key, value in general.items():
+            setattr(self, key, value)
+        self.drive.update(drive)
+
+    def settings(self):
+        return {**{k: getattr(self, k) for k in GENERAL_SETTINGS}, 'drive': dict(self.drive)}
+
+    def save_settings(self):
+        os.makedirs(self.work_dir, exist_ok=True)
+        with open(self.settings_path(), 'w') as f:
+            json.dump(self.settings(), f, indent=2)
+
+    def execute_settings(self, data={}):
+        """ op=settings: lesen; mit Werten (fov, width, ..., drive_check, drive_threshold, ...) ändern und speichern """
+        changes = {k: v for k, v in data.items() if k in GENERAL_SETTINGS or k.startswith('drive_') or k == 'drive'}
+        if changes:
+            try:
+                self.apply_settings(changes)
+            except (TypeError, ValueError) as e:
+                return self.fail(f'Ungültiger Wert: {e}')
+            if self.backend not in ('auto', 'opencv', 'stella'):
+                self.backend = 'auto'
+            self.save_settings()
+        return self.success(settings=self.settings(), work_dir=self.work_dir, usage=self.tmp_usage())
+
+    # -- Tmp-Ordner --
+
+    @staticmethod
+    def folder_size(path):
+        total = 0
+        for root, _, files in os.walk(path):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    pass
+        return total
+
+    def tmp_usage(self):
+        sessions = os.path.join(self.work_dir, 'sessions')
+        uploads = os.path.join(self.work_dir, 'uploads')
+        return {
+            'sessions': len(os.listdir(sessions)) if os.path.isdir(sessions) else 0,
+            'uploads': len(os.listdir(uploads)) if os.path.isdir(uploads) else 0,
+            'bytes': self.folder_size(self.work_dir) if os.path.isdir(self.work_dir) else 0
+        }
+
+    def execute_clear_tmp(self, data={}):
+        """
+        op=clear_tmp: löscht beendete Läufe und Uploads im Arbeitsverzeichnis. Laufende Sessions, ihre Quellvideos,
+        die Einstellungen und das ORB-Vokabular bleiben erhalten.
+        """
+        running = {s.id for s in self.sessions.values() if s.is_running()}
+        keep_files = {os.path.abspath(s.source) for s in self.sessions.values()
+                      if s.is_running() and s.source and os.path.isfile(s.source)}
+        before = self.tmp_usage()['bytes']
+        removed = 0
+        sessions = os.path.join(self.work_dir, 'sessions')
+        if os.path.isdir(sessions):
+            for name in os.listdir(sessions):
+                if name in running:
+                    continue
+                shutil.rmtree(os.path.join(sessions, name), ignore_errors=True)
+                self.sessions.pop(name, None)
+                removed += 1
+        uploads = os.path.join(self.work_dir, 'uploads')
+        if os.path.isdir(uploads):
+            for name in os.listdir(uploads):
+                path = os.path.join(uploads, name)
+                if os.path.abspath(path) in keep_files:
+                    continue
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+        freed = before - self.tmp_usage()['bytes']
+        self.info(f'Tmp geleert: {removed} Einträge, {freed} Bytes')
+        return self.success(f'{removed} Einträge gelöscht, {freed / 1e6:.1f} MB frei, {len(running)} laufende behalten',
+                            removed=removed, freed=freed, kept=sorted(running), usage=self.tmp_usage())
+
+    # -- Drive Radar --
+
+    def drive_status(self, s: SlamSession, with_points=False, max_points=4000):
+        """
+        Prüft, ob der Weg vor der Kamera frei ist.
+        Berücksichtigt werden Punkte im Kuchenausschnitt (Öffnungswinkel angle, Reichweite range) oberhalb von
+        Kamerahöhe + lower und bis zum Sichtwinkel up_angle nach oben. Im Weg sind davon die Punkte bis zur
+        Prüfdistanz check; frei ist der Weg bei höchstens threshold Punkten.
+        """
+        cfg = self.drive
+        with s.lock:
+            pose = s.poses[-1] if s.poses else None
+        res = {'session': s.id, 'status': s.status, 'tracking': s.tracking, 'pose': pose, 'drive': dict(cfg),
+               'free': None, 'count': 0, 'visible': 0}
+        if pose is None or s.tracking != 'tracking' and s.status in ('starting', 'running'):
+            res['reason'] = 'keine Pose' if pose is None else 'Tracking ' + s.tracking
+            return res
+        P = s.points_array()
+        yaw = math.radians(pose['yaw'])
+        dx, dy, dz = P[:, 0] - pose['x'], P[:, 1] - pose['y'], P[:, 2] - pose['z']
+        fwd = dx * math.sin(yaw) + dz * math.cos(yaw)
+        side = dx * math.cos(yaw) - dz * math.sin(yaw)
+        up = -dy  # y zeigt nach unten
+        dist = np.hypot(fwd, side)
+        ang = np.degrees(np.arctan2(side, fwd))
+        with np.errstate(invalid='ignore', divide='ignore'):
+            elev = np.degrees(np.arctan2(up, dist))
+        mask = (fwd > 0) & (np.abs(ang) <= cfg['angle'] / 2) & (dist <= cfg['range']) \
+            & (up >= cfg['lower']) & (elev <= cfg['up_angle'])
+        zone = mask & (dist <= cfg['check'])
+        count = int(zone.sum())
+        res.update({'free': count <= int(cfg['threshold']), 'count': count, 'visible': int(mask.sum())})
+        if zone.any():
+            res['nearest'] = round(float(dist[zone].min()), 3)
+        if with_points:
+            idx = np.where(mask)[0]
+            if len(idx) > max_points:
+                idx = idx[np.linspace(0, len(idx) - 1, max_points).astype(int)]
+            res['points'] = [[round(float(side[i]), 3), round(float(fwd[i]), 3), round(float(up[i]), 3),
+                              1 if zone[i] else 0] for i in idx]
+        return res
+
+    def drive_check(self, s: SlamSession):
+        """ Event slam_path, wenn sich frei/blockiert ändert """
+        st = self.drive_status(s)
+        if st['free'] is None:
+            return
+        if self._drive_free.get(s.id) != st['free']:
+            self._drive_free[s.id] = st['free']
+            self.emit_event('slam_path', session=s.id, free=st['free'], count=st['count'],
+                            threshold=int(self.drive['threshold']), check=self.drive['check'],
+                            nearest=st.get('nearest'))
+
+    def execute_drive(self, data):
+        """ op=drive: Weg frei?, Punkte im Ausschnitt (relativ: seitlich, vorwärts, Höhe, im Weg) """
+        try:
+            s = self.get_session(data.get('session', ''))
+        except ValueError as e:
+            return self.fail(str(e))
+        with_points = str(data.get('points', 1)) not in ('0', 'false', 'False')
+        return self.success(**self.drive_status(s, with_points))
+
     # Die Endpunkte laufen über den Dispatcher (/pysys/dispatcher?type=slam&slam=<name> -> page_<name>), weil ein
     # nachgeladener Runner nach dem ersten Request keine eigenen Flask-Routen mehr anlegen kann. Wenn der Runner
     # beim Start geladen wird, gibt es sie zusätzlich unter /nxml/slam/<name>.
@@ -1503,7 +1728,24 @@ class SlamRunner(r.BaseJobExecutor):
         img.save(buf)
         return Response(buf.getvalue(), mimetype='image/svg+xml', headers={'Cache-Control': 'no-store'})
 
+    # -- Seiten: Main (index), Drive Radar (drive), Einstellungen (settings) --
+
+    PAGES = [('index', 'Main'), ('drive', 'Drive Radar'), ('settings', 'Einstellungen')]
+
+    def part_nav(self, p: b.Page, active='index'):
+        items = [(title, self.dispatcher_link(name), name) for name, title in self.PAGES]
+        p.nav(*[(t, url) for t, url, _ in items], active=self.dispatcher_link(active), _class='slam-nav',
+              data_type=self.type)
+        # in der UI v2 die Seiten im Inhaltsbereich wechseln statt die UI zu verlassen
+        p('<script>{ const SLAM_NAV_TYPE = ' + json.dumps(self.type) + ';\n' + SLAM_NAV_JS + '\n}</script>')
+
+    def script(self, p: b.Page, name, cfg, js):
+        cfg_json = json.dumps(cfg).replace('</', '<\\/')
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        p('<script>{ const ' + name + ' = ' + cfg_json + ';\n' + js + '\n}</script>')
+
     def part_index(self, p: b.Page, params={}):
+        self.part_nav(p, 'index')
         cfg = {
             'type': self.type,
             'routes': {name: self.route(name) for name in ['upload', 'frame', 'export', 'qr']},
@@ -1514,13 +1756,25 @@ class SlamRunner(r.BaseJobExecutor):
         }
         p(f'<style>{SLAM_CSS}</style>')
         p(SLAM_HTML)
-        cfg_json = json.dumps(cfg).replace('</', '<\\/')
-        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
-        p('<script>{ const SLAM_CFG = ' + cfg_json + ';\n' + SLAM_JS + '\n}</script>')
+        self.script(p, 'SLAM_CFG', cfg, SLAM_JS)
+
+    def part_drive(self, p: b.Page, params={}):
+        self.part_nav(p, 'drive')
+        p(f'<style>{SLAM_CSS}{DRIVE_CSS}</style>')
+        p(DRIVE_HTML)
+        self.script(p, 'DRIVE_CFG', {'type': self.type, 'drive': self.drive, 'settings': self.dispatcher_link('settings'),
+                                     'session': str(params.get('session', ''))}, DRIVE_JS)
+
+    def part_settings(self, p: b.Page, params={}):
+        self.part_nav(p, 'settings')
+        p(f'<style>{SLAM_CSS}</style>')
+        p(SETTINGS_HTML)
+        self.script(p, 'SET_CFG', {'type': self.type}, SETTINGS_JS)
 
 
 SLAM_CSS = """
 .slam { max-width: 1400px; }
+nav.slam-nav { margin-bottom: 12px; }
 .slam-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(320px, 1fr); gap: 16px; }
 @media (max-width: 900px) { .slam-grid { grid-template-columns: 1fr; } }
 .slam-card { border: 1px solid #8885; border-radius: 8px; padding: 10px 12px; min-width: 0; }
@@ -1913,8 +2167,9 @@ SLAM_JS = r"""
   // -- Höhenfilter: Höhe relativ zur Kamera, oben positiv (y zeigt nach unten) --
   const RADAR_KEY = 'nxml_slam_radar';
   function heightLimits() {
-    const lo = $('slam-hmin').value, hi = $('slam-hmax').value;
-    return { lo: lo === '' ? -Infinity : +lo, hi: hi === '' ? Infinity : +hi };
+    // leere oder halb getippte Werte ("-", "1e") gelten als keine Grenze
+    const num = (v, def) => { const x = parseFloat(v); return isFinite(x) ? x : def; };
+    return { lo: num($('slam-hmin').value, -Infinity), hi: num($('slam-hmax').value, Infinity) };
   }
   function camY() { return S.pose ? S.pose.y : 0; }
   function heightOk(i, lim, cy) { const hgt = cy - S.py[i]; return hgt >= lim.lo && hgt <= lim.hi; }
@@ -1942,7 +2197,11 @@ SLAM_JS = r"""
     if (st.anim != null) $('slam-anim').checked = st.anim;
     if (st.range != null) $('slam-range').value = st.range;
   } catch (e) {}
-  function filterChanged() { saveRadarSettings(); rebuildRadar(); drawMap(); }
+  let filterTimer = null;
+  function filterChanged() {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => { saveRadarSettings(); rebuildRadar(); drawMap(); }, 120);
+  }
   ['slam-hmin', 'slam-hmax'].forEach((id) => $(id).addEventListener('input', filterChanged));
   $('slam-hmap').addEventListener('change', filterChanged);
   $('slam-hreset').addEventListener('click', () => { $('slam-hmin').value = ''; $('slam-hmax').value = ''; filterChanged(); });
@@ -1951,8 +2210,15 @@ SLAM_JS = r"""
     const cy = camY(), below = [];
     for (let i = 0; i < S.py.length; i++) { const hgt = cy - S.py[i]; if (hgt < 0) below.push(hgt); }
     if (below.length < 20) { msg('Zu wenige Punkte unter der Kamera, um den Boden zu schätzen', true); return; }
-    const floor = percentile(below, 0.1);
-    $('slam-hmin').value = +(floor * 0.75).toPrecision(3);
+    // dichteste Schicht im Histogramm der Höhen unter der Kamera (vereinzelte Ausreißer stören so nicht)
+    const lo = percentile(below, 0.01), BINS = 60, width = (0 - lo) / BINS || 1, bins = new Array(BINS).fill(0);
+    for (const hgt of below) { const k = Math.floor((hgt - lo) / width); if (k >= 0 && k < BINS) bins[k]++; }
+    let best = 0;
+    for (let k = 1; k < BINS; k++) if (bins[k] > bins[best]) best = k;
+    const floor = lo + (best + 0.5) * width;
+    // knapp über der Schicht abschneiden: halbe Lücke zur Kamera, höchstens 3 Histogrammstufen
+    const cut = Math.min(floor + 3 * width, floor / 2);
+    $('slam-hmin').value = +cut.toPrecision(3);
     msg('Boden bei ca. ' + fmt(floor) + ', ausgeblendet bis ' + $('slam-hmin').value);
     filterChanged();
   });
@@ -1983,15 +2249,29 @@ SLAM_JS = r"""
       const q = S.poses[i], dx = q[2] - p.x, dz = q[4] - p.z;
       trail.push((dx * c - dz * s) / R, (dx * s + dz * c) / R);
     }
-    S.radar = { pts: out, trail, yaw };
+    // das Radar zeichnet laufend: bei sehr vielen Punkten nur eine Auswahl
+    let pts = out;
+    if (out.length / 3 > MAX_RADAR_POINTS) {
+      const k = Math.ceil(out.length / 3 / MAX_RADAR_POINTS);
+      pts = [];
+      for (let i = 0; i < out.length; i += 3 * k) pts.push(out[i], out[i + 1], out[i + 2]);
+    }
+    S.radar = { pts, trail, yaw };
     requestRadar();
   }
   // mit Animation zeichnet requestAnimationFrame laufend, ohne nur bei neuen Daten
   let radarLoop = false;
+  let radarError = '';
   function radarFrame(ts) {
     if (!alive()) { radarLoop = false; return; }
     const anim = $('slam-anim').checked;
-    drawRadar(ts, anim);
+    // ein Fehler beim Zeichnen darf die Schleife nicht dauerhaft anhalten
+    try {
+      drawRadar(ts, anim);
+      radarError = '';
+    } catch (e) {
+      if (String(e) !== radarError) { radarError = String(e); console.error('SLAM-Radar', e); }
+    }
     radarLoop = anim;
     if (anim) requestAnimationFrame(radarFrame);
   }
@@ -2082,7 +2362,15 @@ SLAM_JS = r"""
     if ($('slam-follow').checked && S.pose) return { cx: S.pose.x, cz: S.pose.z, k: v.k };
     return v;
   }
+  // höchstens ein Neuzeichnen pro Bild, egal wie oft Daten, Filter oder Maus es anstoßen
+  let mapPending = false;
   function drawMap() {
+    if (mapPending) return;
+    mapPending = true;
+    requestAnimationFrame(() => { mapPending = false; if (alive()) drawMapNow(); });
+  }
+  const MAX_MAP_POINTS = 200000, MAX_RADAR_POINTS = 25000;
+  function drawMapNow() {
     const c = $('slam-map');
     const { ctx, w, h } = canvas(c);
     const v = currentView(w, h);
@@ -2101,7 +2389,8 @@ SLAM_JS = r"""
     const colors = $('slam-colors').checked;
     const filter = $('slam-hmap').checked, lim = heightLimits(), cy = camY();
     ctx.fillStyle = 'rgba(160,200,220,0.55)';
-    for (let i = 0; i < S.px.length; i++) {
+    const mstep = Math.max(1, Math.ceil(S.px.length / MAX_MAP_POINTS));
+    for (let i = 0; i < S.px.length; i += mstep) {
       if (filter && !heightOk(i, lim, cy)) continue;
       const x = X(S.px[i]), y = Y(S.pz[i]);
       if (x < 0 || y < 0 || x > w || y > h) continue;
@@ -2165,6 +2454,287 @@ SLAM_JS = r"""
 
   drawMap();
   loadSessions();
+})();
+"""
+
+
+SLAM_NAV_JS = r"""
+(function() {
+  // UI v2 (/pysys/ui): Seiten des Runners im Inhaltsbereich laden, sonst normale Links
+  const T = SLAM_NAV_TYPE;
+  const navs = document.querySelectorAll('nav.slam-nav[data-type="' + T + '"]');
+  const nav = navs[navs.length - 1], content = document.getElementById('content');
+  if (!nav || !content || !content.contains(nav) || location.pathname.indexOf('/pysys/ui') !== 0) return;
+  nav.addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    const page = new URL(a.href, location.href).searchParams.get(T);
+    if (!page) return;
+    e.preventDefault();
+    fetch('/', { method: 'POST', body: new URLSearchParams({ type: T, page }) }).then((r) => r.json()).then((r) => {
+      if (!r.success) { a.title = r.message || 'Fehler'; return; }
+      content.innerHTML = r.content + (r.intern_links || '');
+      content.querySelectorAll('script').forEach((old) => {
+        const s = document.createElement('script');
+        [...old.attributes].forEach((at) => s.setAttribute(at.name, at.value));
+        s.textContent = old.textContent;
+        old.replaceWith(s);
+      });
+    });
+  });
+})();
+"""
+
+DRIVE_CSS = """
+.drive-banner { font-size: 1.6em; font-weight: bold; padding: 14px 18px; border-radius: 10px; text-align: center;
+  background: #8884; transition: background .2s; }
+.drive-banner.free { background: #1f8f4e; color: #fff; }
+.drive-banner.blocked { background: #c62828; color: #fff; }
+.drive-banner small { display: block; font-size: .5em; font-weight: normal; opacity: .9; margin-top: 4px; }
+#drive-canvas { width: 100%; height: 460px; background: #071109; border-radius: 8px; display: block; }
+.drive-grid { display: grid; grid-template-columns: minmax(320px, 2fr) minmax(260px, 1fr); gap: 16px; margin-top: 14px; }
+@media (max-width: 900px) { .drive-grid { grid-template-columns: 1fr; } }
+.drive-form .slam-row label { min-width: 170px; }
+"""
+
+DRIVE_HTML = """
+<div class="slam drive">
+  <div class="slam-row">
+    <label for="drive-session">Lauf</label><select id="drive-session" style="min-width: 300px"></select>
+    <button id="drive-refresh">Aktualisieren</button>
+  </div>
+  <div class="drive-banner" id="drive-banner">-<small id="drive-sub"></small></div>
+  <div class="drive-grid">
+    <div class="slam-card">
+      <canvas id="drive-canvas"></canvas>
+      <div class="slam-legend">Blickrichtung oben. Rot = im Weg (bis zur Prüfdistanz), grün = sichtbar.
+        Nicht angezeigt: Punkte unterhalb Kamerahöhe + Untergrenze und oberhalb des Sichtwinkels.</div>
+    </div>
+    <div class="slam-card drive-form">
+      <h3>Weg-Prüfung</h3>
+      <div class="slam-row"><label for="drive-threshold">erlaubte Punkte im Weg</label>
+        <input type="number" id="drive-threshold" min="0" step="1" /></div>
+      <div class="slam-row"><label for="drive-check">Prüfdistanz</label>
+        <input type="number" id="drive-check" min="0" step="any" /></div>
+      <div class="slam-row"><label for="drive-range">Reichweite</label>
+        <input type="number" id="drive-range" min="0.01" step="any" /></div>
+      <div class="slam-row"><label for="drive-angle">Öffnungswinkel °</label>
+        <input type="number" id="drive-angle" min="5" max="180" step="1" /></div>
+      <div class="slam-row"><label for="drive-lower">Untergrenze über Kamera</label>
+        <input type="number" id="drive-lower" step="any" /></div>
+      <div class="slam-row"><label for="drive-up">Sichtwinkel nach oben °</label>
+        <input type="number" id="drive-up" min="0" max="90" step="1" /></div>
+      <div class="slam-row"><button id="drive-save">Übernehmen</button><span class="slam-msg" id="drive-msg"></span></div>
+      <div class="slam-stats" style="margin-top: 10px">
+        <div><span>im Weg</span><b id="drive-v-count">-</b></div>
+        <div><span>nächster</span><b id="drive-v-near">-</b></div>
+        <div><span>sichtbar</span><b id="drive-v-visible">-</b></div>
+        <div><span>Tracking</span><b id="drive-v-tracking">-</b></div>
+        <div><span>Yaw</span><b id="drive-v-yaw">-</b></div>
+        <div><span>Bild</span><b id="drive-v-frame">-</b></div>
+      </div>
+      <div class="slam-legend" style="margin-top: 8px">Einheiten wie die Karte (erste Bewegung = 1).
+        Bei Änderung von frei/blockiert löst der Runner das Event <code>slam_path</code> aus.</div>
+    </div>
+  </div>
+</div>
+"""
+
+DRIVE_JS = r"""
+(function() {
+  const cfg = DRIVE_CFG;
+  const $ = (id) => document.getElementById(id);
+  const rootEl = $('drive-canvas').closest('.slam');
+  const alive = () => rootEl.isConnected;
+  const url = (path, params) => location.protocol + '//' + location.host + path +
+    (params ? (path.indexOf('?') >= 0 ? '&' : '?') + new URLSearchParams(params) : '');
+  const job = (data) => fetch(url('/'), { method: 'POST', body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
+  const fmt = (v, n) => (v == null || isNaN(v)) ? '-' : (+v).toFixed(n == null ? 2 : n);
+  const FIELDS = { threshold: 'drive-threshold', check: 'drive-check', range: 'drive-range', angle: 'drive-angle',
+                   lower: 'drive-lower', up_angle: 'drive-up' };
+  const D = { session: cfg.session || '', drive: cfg.drive, last: null, token: 0 };
+  function fillForm(drive) { Object.entries(FIELDS).forEach(([k, id]) => { if (document.activeElement !== $(id)) $(id).value = drive[k]; }); }
+  fillForm(D.drive);
+
+  $('drive-save').addEventListener('click', () => {
+    const data = { op: 'settings' };
+    Object.entries(FIELDS).forEach(([k, id]) => { if ($(id).value !== '') data['drive_' + k] = $(id).value; });
+    job(data).then((r) => {
+      $('drive-msg').textContent = r.success ? 'gespeichert' : (r.message || 'Fehler');
+      if (r.success) { D.drive = r.settings.drive; fillForm(D.drive); }
+      setTimeout(() => { if (alive()) $('drive-msg').textContent = ''; }, 2000);
+    });
+  });
+  Object.values(FIELDS).forEach((id) => $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('drive-save').click(); }));
+
+  function loadSessions() {
+    return job({ op: 'sessions' }).then((r) => {
+      const sel = $('drive-session'), items = r.sessions || [];
+      sel.innerHTML = '';
+      items.forEach((s) => {
+        const o = document.createElement('option');
+        o.value = s.session; o.textContent = s.session + ' · ' + s.status + ' · ' + String(s.source).slice(-40);
+        sel.appendChild(o);
+      });
+      if (!D.session) {
+        const run = items.find((s) => s.status === 'running' || s.status === 'starting');
+        D.session = run ? run.session : (items[0] ? items[0].session : '');
+      }
+      sel.value = D.session;
+    });
+  }
+  $('drive-session').addEventListener('change', (e) => { D.session = e.target.value; D.token++; poll(D.token); });
+  $('drive-refresh').addEventListener('click', loadSessions);
+
+  async function poll(token) {
+    if (!alive() || token !== D.token) return;
+    let live = false;
+    if (D.session) {
+      try {
+        const r = await job({ op: 'drive', session: D.session });
+        if (!alive() || token !== D.token) return;
+        if (r.success) { D.last = r; D.drive = r.drive; fillForm(r.drive); show(r); live = r.status === 'running' || r.status === 'starting'; }
+      } catch (e) {}
+    }
+    setTimeout(() => poll(token), live ? 300 : 2000);
+  }
+
+  function show(r) {
+    const b = $('drive-banner'), sub = $('drive-sub');
+    b.className = 'drive-banner' + (r.free === true ? ' free' : r.free === false ? ' blocked' : '');
+    b.firstChild.textContent = r.free === true ? 'Weg frei' : r.free === false ? 'Hindernis' : (r.reason || 'unbekannt');
+    sub.textContent = r.free == null ? '' : r.count + ' Punkte im Weg (erlaubt ' + r.drive.threshold + ') bis ' + fmt(r.drive.check) +
+      (r.nearest != null ? ', nächster bei ' + fmt(r.nearest) : '');
+    $('drive-v-count').textContent = r.count;
+    $('drive-v-near').textContent = fmt(r.nearest);
+    $('drive-v-visible').textContent = r.visible;
+    $('drive-v-tracking').textContent = r.tracking;
+    $('drive-v-yaw').textContent = r.pose ? fmt(r.pose.yaw, 1) + '°' : '-';
+    $('drive-v-frame').textContent = r.pose ? r.pose.frame : '-';
+    draw(r);
+  }
+
+  function draw(r) {
+    const c = $('drive-canvas'), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const d = r.drive, half = Math.max(1, Math.min(180, d.angle)) / 2 * Math.PI / 180;
+    const cx = w / 2, cy = h - 24;
+    // Maßstab: Reichweite passt nach oben und (bei breitem Winkel) zur Seite
+    const k = Math.max(1, Math.min((cy - 16) / d.range, (w / 2 - 16) / (d.range * Math.max(Math.sin(half), 0.2))));
+    const R = d.range * k, a0 = -Math.PI / 2 - half, a1 = -Math.PI / 2 + half;
+    // Kuchen
+    ctx.fillStyle = '#0b2614';
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, a0, a1); ctx.closePath(); ctx.fill();
+    // Prüfbereich
+    const rc = Math.min(d.check, d.range) * k;
+    ctx.fillStyle = r.free === false ? 'rgba(229,57,53,0.28)' : r.free === true ? 'rgba(67,160,71,0.22)' : 'rgba(150,150,150,0.15)';
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, rc, a0, a1); ctx.closePath(); ctx.fill();
+    // Ringe und Beschriftung
+    ctx.strokeStyle = 'rgba(120,255,160,0.25)'; ctx.lineWidth = 1; ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(150,255,180,0.8)';
+    for (let i = 1; i <= 4; i++) {
+      ctx.beginPath(); ctx.arc(cx, cy, R * i / 4, a0, a1); ctx.stroke();
+      ctx.fillText(+(d.range * i / 4).toPrecision(3), cx + 4, cy - R * i / 4 + 12);
+    }
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.cos(a0), cy + R * Math.sin(a0));
+    ctx.moveTo(cx, cy); ctx.lineTo(cx + R * Math.cos(a1), cy + R * Math.sin(a1)); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - R); ctx.stroke();
+    ctx.strokeStyle = r.free === false ? '#ff5252' : '#66bb6a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, rc, a0, a1); ctx.stroke();
+    // Punkte: Höhe als Helligkeit
+    for (const p of (r.points || [])) {
+      const x = cx + p[0] * k, y = cy - p[1] * k;
+      ctx.fillStyle = p[3] ? '#ff5252' : 'rgba(110,255,150,0.85)';
+      const s = p[3] ? 3.2 : 2.2;
+      ctx.fillRect(x - s / 2, y - s / 2, s, s);
+    }
+    // Kamera
+    ctx.fillStyle = '#ffd34d';
+    ctx.beginPath(); ctx.moveTo(cx, cy - 10); ctx.lineTo(cx - 7, cy + 6); ctx.lineTo(cx + 7, cy + 6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('Öffnung ' + fmt(d.angle, 0) + '°, oben bis ' + fmt(d.up_angle, 0) + '°, ab ' + fmt(d.lower) + ' über Kamera', 8, 16);
+  }
+  const onResize = () => { if (!alive()) { window.removeEventListener('resize', onResize); return; } if (D.last) draw(D.last); };
+  window.addEventListener('resize', onResize);
+
+  loadSessions().then(() => poll(D.token));
+})();
+"""
+
+SETTINGS_HTML = """
+<div class="slam settings">
+  <div class="slam-card">
+    <h3>Allgemein</h3>
+    <div class="slam-row"><label for="set-backend">Backend</label>
+      <select id="set-backend"><option value="auto">auto</option><option value="opencv">opencv</option><option value="stella">stella</option></select></div>
+    <div class="slam-row"><label for="set-fov">FOV °</label><input type="number" id="set-fov" min="20" max="170" step="1" /></div>
+    <div class="slam-row"><label for="set-width">Breite (px)</label><input type="number" id="set-width" min="160" step="16" /></div>
+    <div class="slam-row"><label for="set-event_every">slam_pose jedes n-te Bild</label><input type="number" id="set-event_every" min="1" step="1" /></div>
+    <div class="slam-row"><label for="set-push_timeout">Push-Timeout (s)</label><input type="number" id="set-push_timeout" min="1" step="1" /></div>
+  </div>
+  <div class="slam-card" style="margin-top: 12px">
+    <h3>Drive Radar</h3>
+    <div class="slam-row"><label for="set-drive_angle">Öffnungswinkel °</label><input type="number" id="set-drive_angle" min="5" max="180" step="1" /></div>
+    <div class="slam-row"><label for="set-drive_range">Reichweite</label><input type="number" id="set-drive_range" min="0.01" step="any" /></div>
+    <div class="slam-row"><label for="set-drive_check">Prüfdistanz</label><input type="number" id="set-drive_check" min="0" step="any" /></div>
+    <div class="slam-row"><label for="set-drive_lower">Untergrenze über Kamera</label><input type="number" id="set-drive_lower" step="any" />
+      <span class="slam-legend">0 = alles unterhalb der Kamerahöhe ausblenden, positiv = zusätzlich n Einheiten darüber</span></div>
+    <div class="slam-row"><label for="set-drive_up_angle">Sichtwinkel nach oben °</label><input type="number" id="set-drive_up_angle" min="0" max="90" step="1" /></div>
+    <div class="slam-row"><label for="set-drive_threshold">erlaubte Punkte im Weg</label><input type="number" id="set-drive_threshold" min="0" step="1" /></div>
+    <div class="slam-row"><label><input type="checkbox" id="set-drive_events" /> Event slam_path bei Änderung</label></div>
+  </div>
+  <div class="slam-row" style="margin-top: 10px"><button id="set-save">Speichern</button><span class="slam-msg" id="set-msg"></span></div>
+  <div class="slam-card" style="margin-top: 12px">
+    <h3>Aktionen</h3>
+    <div class="slam-row"><span>Arbeitsverzeichnis</span><code id="set-workdir"></code></div>
+    <div class="slam-row"><span id="set-usage"></span></div>
+    <div class="slam-row"><button id="set-clear">Tmp-Ordner leeren</button>
+      <span class="slam-legend">löscht beendete Läufe und hochgeladene Videos, laufende Läufe, Einstellungen und das ORB-Vokabular bleiben</span></div>
+    <div class="slam-msg" id="set-clear-msg"></div>
+  </div>
+</div>
+"""
+
+SETTINGS_JS = r"""
+(function() {
+  const cfg = SET_CFG;
+  const $ = (id) => document.getElementById(id);
+  const job = (data) => fetch(location.protocol + '//' + location.host + '/', { method: 'POST',
+    body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
+  const GENERAL = ['backend', 'fov', 'width', 'event_every', 'push_timeout'];
+  const DRIVE = ['angle', 'range', 'check', 'lower', 'up_angle', 'threshold'];
+  function usage(u, dir) {
+    $('set-workdir').textContent = dir || '';
+    $('set-usage').textContent = u ? u.sessions + ' Läufe, ' + u.uploads + ' Uploads, ' + (u.bytes / 1e6).toFixed(1) + ' MB' : '';
+  }
+  function fill(r) {
+    const s = r.settings;
+    GENERAL.forEach((k) => $('set-' + k).value = s[k]);
+    DRIVE.forEach((k) => $('set-drive_' + k).value = s.drive[k]);
+    $('set-drive_events').checked = !!s.drive.events;
+    usage(r.usage, r.work_dir);
+  }
+  function msg(id, text, error) { $(id).textContent = text; $(id).classList.toggle('error', !!error); }
+  job({ op: 'settings' }).then((r) => { if (r.success) fill(r); else msg('set-msg', r.message, true); });
+  $('set-save').addEventListener('click', () => {
+    const data = { op: 'settings', drive_events: $('set-drive_events').checked ? 1 : 0 };
+    GENERAL.forEach((k) => data[k] = $('set-' + k).value);
+    DRIVE.forEach((k) => data['drive_' + k] = $('set-drive_' + k).value);
+    job(data).then((r) => {
+      if (!r.success) { msg('set-msg', r.message || 'Fehler', true); return; }
+      fill(r); msg('set-msg', 'Gespeichert');
+    });
+  });
+  $('set-clear').addEventListener('click', () => {
+    if (!confirm('Beendete Läufe und hochgeladene Videos im Arbeitsverzeichnis löschen?')) return;
+    msg('set-clear-msg', 'Lösche ...');
+    job({ op: 'clear_tmp' }).then((r) => {
+      msg('set-clear-msg', r.message || '', !r.success);
+      if (r.usage) usage(r.usage, $('set-workdir').textContent);
+    });
+  });
 })();
 """
 
