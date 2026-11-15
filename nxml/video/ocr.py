@@ -484,7 +484,9 @@ class VideoOcr(r.BaseJobExecutor):
         }
         p(f'<style>{VIDEO_OCR_CSS}</style>')
         p(VIDEO_OCR_HTML)
-        p(f'<script>const VIDEO_OCR = {json.dumps(cfg).replace('</', '<\\/')};\n{VIDEO_OCR_JS}</script>')
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        cfg_json = json.dumps(cfg).replace('</', '<\\/')
+        p('<script>{ const VIDEO_OCR = ' + cfg_json + ';\n' + VIDEO_OCR_JS + '\n}</script>')
 
 
 VIDEO_OCR_CSS = """
@@ -601,6 +603,9 @@ VIDEO_OCR_JS = r"""
 (function() {
   const cfg = VIDEO_OCR;
   const $ = (id) => document.getElementById(id);
+  // UI v2 ersetzt den Inhalt beim Wechsel: dann Abfragen dieser Instanz beenden
+  const rootEl = $('vo-file').closest('.vo');
+  const alive = () => rootEl.isConnected;
   const state = { video: null, box: null, job: null, rows: [] };
   const url = (path, params) => {
     const base = location.protocol + '//' + location.host;
@@ -682,7 +687,8 @@ VIDEO_OCR_JS = r"""
     }
     drawBox();
   });
-  window.addEventListener('resize', drawBox);
+  const onResize = () => { if (alive()) drawBox(); else window.removeEventListener('resize', onResize); };
+  window.addEventListener('resize', onResize);
   function scale() { return img.clientWidth / (img.naturalWidth || 1); }
   function clampBox() {
     const b = state.box, W = img.naturalWidth, H = img.naturalHeight;
@@ -787,6 +793,7 @@ VIDEO_OCR_JS = r"""
     });
   }
   function poll() {
+    if (!alive()) return;
     job({ op: 'status', job_id: state.job, offset: state.rows.length }).then((r) => {
       if (!r.success) { msg(3, r.message, true); return; }
       addRows(r.rows);

@@ -1515,7 +1515,8 @@ class SlamRunner(r.BaseJobExecutor):
         p(f'<style>{SLAM_CSS}</style>')
         p(SLAM_HTML)
         cfg_json = json.dumps(cfg).replace('</', '<\\/')
-        p('<script>const SLAM_CFG = ' + cfg_json + ';\n' + SLAM_JS + '</script>')
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        p('<script>{ const SLAM_CFG = ' + cfg_json + ';\n' + SLAM_JS + '\n}</script>')
 
 
 SLAM_CSS = """
@@ -1672,6 +1673,9 @@ SLAM_JS = r"""
 (function() {
   const cfg = SLAM_CFG;
   const $ = (id) => document.getElementById(id);
+  // UI v2 ersetzt den Inhalt beim Wechsel: dann Timer und Schleifen dieser Instanz beenden
+  const rootEl = $('slam-source').closest('.slam');
+  const alive = () => rootEl.isConnected;
   const TAU = Math.PI * 2;
   const S = { session: null, token: 0, status: '', poses: [], px: [], py: [], pz: [], pc: [], trajFrom: 0, ptsFrom: 0,
               pose: null, jpegFrame: -1, imgBusy: false, view: null, radar: null, range: 1, dist: 0 };
@@ -1764,7 +1768,8 @@ SLAM_JS = r"""
       () => { window.prompt('Link', text); });
   });
   // neue Session vom Handy automatisch anzeigen
-  setInterval(() => {
+  const qrPoll = setInterval(() => {
+    if (!alive()) { clearInterval(qrPoll); return; }
     if (!$('slam-qr').open) return;
     job({ op: 'sessions' }).then((r) => {
       const s = (r.sessions || []).find((x) => (x.status === 'running' || x.status === 'starting') && x.session !== S.session);
@@ -1840,7 +1845,7 @@ SLAM_JS = r"""
     poll(S.token);
   }
   async function poll(token) {
-    if (token !== S.token) return;
+    if (token !== S.token || !alive()) return;
     let more = false;
     try {
       const r = await job({ op: 'state', session: S.session, traj_from: S.trajFrom, pts_from: S.ptsFrom });
@@ -1984,14 +1989,19 @@ SLAM_JS = r"""
   // mit Animation zeichnet requestAnimationFrame laufend, ohne nur bei neuen Daten
   let radarLoop = false;
   function radarFrame(ts) {
+    if (!alive()) { radarLoop = false; return; }
     const anim = $('slam-anim').checked;
     drawRadar(ts, anim);
     radarLoop = anim;
     if (anim) requestAnimationFrame(radarFrame);
   }
-  function requestRadar() { if (!radarLoop) { radarLoop = true; requestAnimationFrame(radarFrame); } }
+  function requestRadar() { if (!radarLoop && alive()) { radarLoop = true; requestAnimationFrame(radarFrame); } }
   $('slam-anim').addEventListener('change', () => { saveRadarSettings(); requestRadar(); });
-  window.addEventListener('resize', requestRadar);
+  const onResize = () => {
+    if (!alive()) { window.removeEventListener('resize', onResize); return; }
+    requestRadar(); drawMap();
+  };
+  window.addEventListener('resize', onResize);
   function drawRadar(ts, anim) {
     const c = $('slam-radar');
     const { ctx, w, h } = canvas(c, c.clientWidth);
@@ -2152,7 +2162,6 @@ SLAM_JS = r"""
   map.addEventListener('pointerup', () => { drag = null; map.style.cursor = ''; });
   map.addEventListener('dblclick', () => { S.view = null; drawMap(); });
   ['slam-follow', 'slam-colors', 'slam-fov'].forEach((id) => $(id).addEventListener('change', drawMap));
-  window.addEventListener('resize', drawMap);
 
   drawMap();
   loadSessions();

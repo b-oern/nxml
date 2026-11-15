@@ -396,7 +396,8 @@ class PointCloudRunner(r.BaseJobExecutor):
         p(f'<style>{PC_CSS}</style>')
         p(PC_HTML)
         cfg_json = json.dumps(cfg).replace('</', '<\\/')
-        p('<script>const PC_CFG = ' + cfg_json + ';\n' + PC_JS + '</script>')
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        p('<script>{ const PC_CFG = ' + cfg_json + ';\n' + PC_JS + '\n}</script>')
 
 
 PC_CSS = """
@@ -465,6 +466,15 @@ PC_JS = r"""
 (async function() {
   const cfg = PC_CFG;
   const $ = (id) => document.getElementById(id);
+  // UI v2 ersetzt den Inhalt beim Wechsel: dann Timer beenden und WebGL freigeben
+  const rootEl = $('pc-view').closest('.pc');
+  const alive = () => rootEl.isConnected;
+  const cleanups = [];
+  const watcher = setInterval(() => {
+    if (alive()) return;
+    clearInterval(watcher);
+    cleanups.forEach((f) => { try { f(); } catch (e) {} });
+  }, 1000);
   const url = (path, params) => location.protocol + '//' + location.host + path +
     (params ? (path.indexOf('?') >= 0 ? '&' : '?') + new URLSearchParams(params) : '');
   const job = (data) => fetch(url('/'), { method: 'POST', body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
@@ -523,12 +533,19 @@ PC_JS = r"""
     render();
   }
   let pending = false;
+  cleanups.push(() => {
+    controls.dispose(); geometry.dispose(); material.dispose();
+    renderer.dispose(); renderer.forceContextLoss();
+  });
   function render() {
+    if (!alive()) return;
     if (pending) return;
     pending = true;
     requestAnimationFrame(() => { pending = false; if (controls.update()) render(); renderer.render(scene, camera); });
   }
-  new ResizeObserver(resize).observe(view);
+  const observer = new ResizeObserver(resize);
+  observer.observe(view);
+  cleanups.push(() => observer.disconnect());
 
   // -- Daten laden --
   function parse(buf) {
@@ -720,10 +737,11 @@ PC_JS = r"""
   }
   $('pc-source').addEventListener('change', () => load(sourceFromValue($('pc-source').value)));
   $('pc-reload').addEventListener('click', () => load(D.source, true));
-  setInterval(() => {
+  const livePoll = setInterval(() => {
     const running = D.status === 'running' || D.status === 'starting';
     if ($('pc-live').checked && running && D.source && D.source.slam && !D.loading) load(D.source, true);
   }, 3000);
+  cleanups.push(() => clearInterval(livePoll));
   async function loaded(r) {
     if (!r.success) { msg(r.message || 'Fehler', true); return; }
     msg(r.name + ': ' + r.points.toLocaleString() + ' Punkte');
