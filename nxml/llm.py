@@ -149,6 +149,7 @@ class OLLama(BaseLLM):
     """
 
     MODULES = ['ollama']
+    TAGS = ['llm']
 
     def __init__(self, type='ollm', model=None, args: u.Args = None):
         super().__init__(type)
@@ -312,6 +313,7 @@ class LMStudio(LMStudioUiMixin, BaseLLM):
     Konfiguration: LMSTUDIO_URL, LMSTUDIO_MODEL, LMSTUDIO_EMBEDDING_MODEL, LMSTUDIO_LMS (Pfad zu lms)
     """
 
+    TAGS = ['llm']
     ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 
     def __init__(self, type='lmstudio', url=None, model=None, embedding_model=None, lms=None, timeout=600,
@@ -1039,7 +1041,7 @@ class CohereLlm(BaseLLM):
     """
 
     MODULES = ['cohere']
-    TAGS = ['external-api']
+    TAGS = ['external-api', 'llm']
 
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__('cohere')
@@ -1066,7 +1068,9 @@ class Gemini(BaseLLM):
     """
 
     MODULES = ['google-genai']
-    TAGS = ['external-api']
+    TAGS = ['external-api', 'llm']
+
+    MODEL = 'gemini-3.8-flash'
 
     def __init__(self, api_key=None, args:u.Args=None):
         super().__init__('gemini')
@@ -1081,7 +1085,7 @@ class Gemini(BaseLLM):
 
     def prompt(self, prompt, data={}):
         response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=self.MODEL,
             contents=prompt
         )
         return self.success('ok', response=response.text)

@@ -4,6 +4,7 @@
 
 from threading import Thread
 import json
+import re
 import os.path
 import time
 import glob
@@ -791,29 +792,533 @@ class ImageFingerprint(r.ImageExecutor):
             return self.fail(str(e))
 
 
+CAMERA_RE = re.compile(r'^(/dev/video\d+|\d+)$')
+
+
+class CameraGrabber:
+    """
+    Hält eine lokale Kamera (/dev/videoN oder Index) offen und liest im Hintergrund laufend Bilder, frame() liefert
+    das neueste. So bleibt die Kamera bei periodischem Abruf offen (Öffnen dauert, die Belichtung muss sich
+    einregeln) und es kommen keine alten Bilder aus dem Puffer. Nach idle Sekunden ohne Abruf wird sie geschlossen.
+    """
+
+    def __init__(self, source, idle=60.0):
+        self.source = source
+        self.idle = idle
+        self.error = None
+        self.last_used = time.time()
+        self._frame = None
+        self._seq = 0
+        self._stop = False
+        self._cond = __import__('threading').Condition()
+        try:
+            import cv2
+        except ImportError:
+            raise RuntimeError('Für lokale Kameras wird OpenCV benötigt: pip install opencv-python-headless')
+        self.cap = cv2.VideoCapture(int(source) if str(source).isdigit() else source)
+        if not self.cap.isOpened():
+            raise RuntimeError(f'Kamera {source} kann nicht geöffnet werden')
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._thread = Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        fails = 0
+        try:
+            while not self._stop and time.time() - self.last_used < self.idle:
+                ok, frame = self.cap.read()
+                if not ok:
+                    fails += 1
+                    if fails > 50:
+                        self.error = 'Kamera liefert keine Bilder'
+                        break
+                    time.sleep(0.05)
+                    continue
+                fails = 0
+                with self._cond:
+                    self._frame = frame
+                    self._seq += 1
+                    self._cond.notify_all()
+        finally:
+            self._stop = True
+            self.cap.release()
+            with self._cond:
+                self._cond.notify_all()
+
+    @property
+    def alive(self):
+        return not self._stop
+
+    def frame(self, timeout=5.0):
+        """ neuestes Bild als PIL-Image (RGB), wartet auf ein Bild, das nach dem Aufruf aufgenommen wurde """
+        from PIL import Image
+        self.last_used = time.time()
+        with self._cond:
+            seq = self._seq
+            end = time.time() + timeout
+            while self._seq == seq and not self._stop and time.time() < end:
+                self._cond.wait(0.2)
+            if self._frame is None:
+                raise RuntimeError(self.error or f'Kein Bild von {self.source}')
+            frame = self._frame
+        return Image.fromarray(frame[:, :, ::-1].copy())  # BGR -> RGB
+
+    def close(self):
+        self._stop = True
+
+
 class DepthEstimation(r.ImageExecutor):
     """
-    https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
+    Tiefenschätzung mit Depth Anything V2, https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf
+
+    Seiten: Index (Bild analysieren), ImageRadar (Bild-URL abrufen, Hinderniswarnung, wenn im oberen Teil des
+    Bildes etwas näher ist als der Schwellwert; der untere Teil, z.B. der Boden, wird ignoriert).
+
+    ImageRadar-Modelle:
+     - relative: das Standardmodell, Nähe 0..1 je Bild normiert (1 = nächster Punkt im Bild). Der Schwellwert ist
+       damit relativ zum Bild: sind alle Objekte weit weg, gilt das nächste trotzdem als nah.
+     - indoor / outdoor: metrische Modelle (Depth-Anything-V2-Metric-*-Small-hf), Entfernung in Metern, werden beim
+       ersten Gebrauch geladen.
     """
 
     MODULES = ['scipy', 'transformers']
-    def __init__(self, type='depth'):
+
+    MODEL = 'depth-anything/Depth-Anything-V2-Small-hf'
+    METRIC_MODELS = {
+        'indoor': 'depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf',
+        'outdoor': 'depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf',
+    }
+
+    def __init__(self, type='depth', max_length=600, camera_idle=60):
+        """
+            :param max_length: Bilder vor der Analyse auf diese längste Seite verkleinern (0 = Originalgröße)
+            :param camera_idle: lokale Kameras (/dev/video0) nach so vielen Sekunden ohne Abruf schließen
+        """
         super().__init__(type)
         from transformers import pipeline
-        self.pipe = pipeline(task="depth-estimation", model="depth-anything/Depth-Anything-V2-Small-hf")
-        self.define_sig(d.Param('image')).set_description("Schätzt eine Tiefenkarte (Base64-PNG)")\
-            .r_success(image='str')
+        self.max_length = int(max_length)
+        self.camera_idle = float(camera_idle)
+        self.pipe = pipeline(task="depth-estimation", model=self.MODEL)
+        self.pipes = {'relative': self.pipe}
+        self._pipe_lock = __import__('threading').Lock()
+        self._radar_state = {}  # url -> letzter Zustand, Event depth_obstacle nur bei Änderung
+        self.define_sig(d.Param('image'), d.PInt('max_length', self.max_length))\
+            .set_description("Schätzt eine Tiefenkarte (Base64-PNG), max_length: längste Seite vorher "
+                             "verkleinern (0 = Originalgröße)")\
+            .r_success(image='str', duration='float', width='int', height='int')
+        self.define_sig(d.PStr('op', 'radar'), d.PStr('url', ''), d.PStr('model', 'relative'),
+                        d.NP('ignore_bottom', 'float', 30), d.NP('threshold', 'float', 0.7),
+                        d.NP('min_area', 'float', 0.5), d.PInt('max_length', self.max_length))\
+            .set_description("ImageRadar: Bild von url laden, Tiefe schätzen, Hindernis, wenn im oberen Teil "
+                             "(ignore_bottom % unten ignoriert) mindestens min_area % näher als threshold sind. "
+                             "threshold: relative = Nähe 0..1, indoor/outdoor = Meter")\
+            .r(success='bool', obstacle='bool', area='float', nearest='float', duration='float', image='str')
+        self.define_sig(d.PStr('op', 'radar2'), d.PStr('url', ''), d.PStr('zones', '15,70,15'),
+                        d.PStr('model', 'relative'), d.NP('ignore_bottom', 'float', 30), d.NP('threshold', 'float', 0.7),
+                        d.NP('min_area', 'float', 0.5), d.PInt('max_length', self.max_length))\
+            .set_description("ImageRadar2: wie radar, getrennt nach Bereichen der Bildbreite (zones in %, Standard "
+                             "15,70,15 = Links, Mitte, Rechts), message z.B. 'Hindernis Links, Mitte'")\
+            .r(success='bool', message='str', obstacle='bool', zones='list', duration='float')
+        self.define_event('depth_zones', {'url': 'Bild-URL', 'message': "z.B. 'Hindernis Links' oder 'Weg frei'",
+                                          'blocked': 'Namen der blockierten Bereiche', 'zones': 'je Bereich'})
+        self.define_event('depth_obstacle', {'url': 'Bild-URL', 'obstacle': 'Hindernis (bool)',
+                                             'area': 'Anteil näher als Schwellwert in %',
+                                             'nearest': 'nächster Wert (Meter bzw. Nähe)'})
 
     @staticmethod
-    def to_b64(image) -> str:
+    def to_b64(image, format='PNG', **kwargs) -> str:
         buffer = BytesIO()
-        image.save(buffer, format="PNG")
+        image.save(buffer, format=format, **kwargs)
         encoded = base64.b64encode(buffer.getvalue())
         return encoded.decode("utf-8")
 
+    def resize(self, image, data):
+        """ verkleinert auf max_length (aus data, sonst Runner-Einstellung), 0 = unverändert """
+        try:
+            limit = int(float(data.get('max_length', self.max_length) or 0))
+        except (TypeError, ValueError):
+            limit = self.max_length
+        if limit > 0 and max(image.size) > limit:
+            image = image.copy()
+            image.thumbnail((limit, limit))
+        return image
+
     def executeImage(self, image, data):
+        start = time.time()
+        image = self.resize(image.convert('RGB'), data)
         depthmap = self.pipe(image)["depth"]
-        return self.success(image=self.to_b64(depthmap))
+        return self.success(image=self.to_b64(depthmap), duration=round(time.time() - start, 3),
+                            width=image.width, height=image.height)
+
+    # -- ImageRadar --
+
+    def get_pipe(self, model):
+        if model not in self.pipes:
+            if model not in self.METRIC_MODELS:
+                raise ValueError(f'Unbekanntes Modell {model!r}, erlaubt: relative, ' + ', '.join(self.METRIC_MODELS))
+            with self._pipe_lock:
+                if model not in self.pipes:
+                    from transformers import pipeline
+                    self.info(f'Lade {self.METRIC_MODELS[model]}')
+                    self.pipes[model] = pipeline(task="depth-estimation", model=self.METRIC_MODELS[model])
+        return self.pipes[model]
+
+    def fetch_image(self, url, timeout=15):
+        """
+        :param url: http(s)-URL eines Bildes oder lokale Kamera (/dev/video0, 0, 1, ...)
+        """
+        from PIL import Image
+        url = (url or '').strip()
+        if CAMERA_RE.match(url):
+            return self.camera(url).frame()
+        if not re.match(r'^https?://', url, re.I):
+            raise ValueError('url muss mit http:// oder https:// beginnen oder eine Kamera sein (/dev/video0, 0)')
+        resp = requests.get(url, timeout=timeout, headers={'User-Agent': 'nxml-depth'})
+        resp.raise_for_status()
+        return Image.open(BytesIO(resp.content))
+
+    def camera(self, source) -> CameraGrabber:
+        """ offene Kamera wiederverwenden, sonst (neu) öffnen """
+        with self._pipe_lock:
+            cams = self.__dict__.setdefault('_cameras', {})
+            cam = cams.get(source)
+            if cam is None or not cam.alive:
+                cams[source] = cam = CameraGrabber(source, idle=self.camera_idle)
+            return cam
+
+    ZONE_NAMES = ['Links', 'Mitte', 'Rechts']
+
+    @staticmethod
+    def parse_zones(zones):
+        """ "15,70,15" oder Liste -> Anteile in %, auf 100 normiert """
+        if isinstance(zones, str):
+            zones = [z for z in re.split(r'[\s,;/]+', zones.strip()) if z]
+        values = [max(0.0, float(z)) for z in zones]
+        if len(values) < 2:
+            raise ValueError('zones braucht mindestens zwei Anteile, z.B. 15,70,15')
+        if sum(values) <= 0:
+            raise ValueError('Die Anteile in zones müssen zusammen größer als 0 sein')
+        total = sum(values)
+        return [v * 100.0 / total for v in values]
+
+    def radar(self, image, model='relative', ignore_bottom=30.0, threshold=0.7, min_area=0.5, data={}, zones=None):
+        """
+        :param zones: Anteile der Bildbreite in % von links nach rechts (z.B. [15, 70, 15]), None = ein Bereich
+        :return: dict mit obstacle, area (% der Pixel im oberen Teil näher als threshold), nearest und einem
+                 Vorschaubild (JPEG-Base64): Tiefe als Helligkeit (hell = nah), ignorierter Teil abgedunkelt,
+                 nahe Pixel rot; mit zones zusätzlich zones = [{name, start, end, obstacle, area, nearest}] und
+                 message, z.B. "Hindernis Links, Mitte"
+        """
+        import numpy as np
+        from PIL import Image
+        pipe = self.get_pipe(model)  # Laden eines Modells zählt nicht zur Analysedauer
+        start = time.time()
+        image = self.resize(image.convert('RGB'), data)
+        w, h = image.size
+        out = pipe(image)
+        if model == 'relative':
+            near = np.asarray(out['depth'].convert('L').resize((w, h)), np.float32) / 255.0  # 1 = nah
+            close = near >= threshold
+            shade = near
+        else:
+            pred = out['predicted_depth']
+            pred = pred.squeeze().detach().cpu().numpy() if hasattr(pred, 'detach') else np.squeeze(np.asarray(pred))
+            dist = np.asarray(Image.fromarray(pred.astype(np.float32), 'F').resize((w, h), Image.BILINEAR))
+            close = dist <= threshold
+            far = float(np.percentile(dist, 98)) or 1.0
+            shade = 1.0 - np.clip(dist / far, 0, 1)
+        limit = int(round(h * (1 - min(95.0, max(0.0, float(ignore_bottom))) / 100.0)))
+        limit = max(1, min(h, limit))
+        top_close = close[:limit]
+        area = float(top_close.mean() * 100.0)
+        if model == 'relative':
+            nearest = float(np.percentile(near[:limit], 99))
+        else:
+            nearest = float(np.percentile(dist[:limit], 1))
+        obstacle = area >= float(min_area)
+        zone_res = None
+        bounds = []
+        if zones:
+            zone_res = []
+            parts = self.parse_zones(zones)
+            x = 0.0
+            for i, part in enumerate(parts):
+                x0, x1 = int(round(w * x / 100.0)), int(round(w * (x + part) / 100.0))
+                x += part
+                if i == len(parts) - 1:
+                    x1 = w
+                name = self.ZONE_NAMES[i] if len(parts) == 3 else f'Bereich {i + 1}'
+                if x1 <= x0:
+                    zone_res.append({'name': name, 'start': x0, 'end': x1, 'obstacle': False, 'area': 0.0,
+                                     'nearest': None})
+                    continue
+                z_close = top_close[:, x0:x1]
+                z_area = float(z_close.mean() * 100.0)
+                z_near = float(np.percentile(near[:limit, x0:x1], 99)) if model == 'relative' \
+                    else float(np.percentile(dist[:limit, x0:x1], 1))
+                zone_res.append({'name': name, 'start': x0, 'end': x1, 'obstacle': z_area >= float(min_area),
+                                 'area': round(z_area, 2), 'nearest': round(z_near, 3)})
+                if x0 > 0:
+                    bounds.append(x0)
+            obstacle = any(z['obstacle'] for z in zone_res)
+        # Vorschau
+        g = (shade * 255).astype(np.uint8)
+        rgb = np.stack([g, g, g], axis=-1).astype(np.float32)
+        rgb[limit:] *= 0.3
+        mask = np.zeros_like(close)
+        mask[:limit] = top_close
+        rgb[mask] = rgb[mask] * 0.35 + np.array([255, 40, 40]) * 0.65
+        rgb[max(0, limit - 1):limit + 1] = (255, 200, 0)
+        for bx in bounds:  # Bereichsgrenzen im oberen Teil
+            rgb[:limit, max(0, bx - 1):bx + 1] = (80, 180, 255)
+        preview = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+        res = {
+            'obstacle': obstacle, 'area': round(area, 2), 'nearest': round(nearest, 3), 'model': model,
+            'unit': 'Nähe 0..1' if model == 'relative' else 'm', 'threshold': float(threshold),
+            'ignore_bottom': float(ignore_bottom), 'min_area': float(min_area), 'width': w, 'height': h,
+            'duration': round(time.time() - start, 3), 'image': self.to_b64(preview, 'JPEG', quality=80),
+            'photo': self.to_b64(image, 'JPEG', quality=75)  # analysiertes Bild, auch für Kameras ohne URL
+        }
+        if zone_res is not None:
+            blocked = [z['name'] for z in zone_res if z['obstacle']]
+            res['zones'] = zone_res
+            res['message'] = 'Hindernis ' + ', '.join(blocked) if blocked else 'Weg frei'
+        return res
+
+    def execute_radar(self, data):
+        url = str(data.get('url', '')).strip()
+        try:
+            image = self.fetch_image(url)
+            fetched = time.time()
+            res = self.radar(image, data.get('model', 'relative') or 'relative',
+                             float(data.get('ignore_bottom', 30) or 0), float(data.get('threshold', 0.7)),
+                             float(data.get('min_area', 0.5) or 0), data)
+        except Exception as e:
+            return self.fail(str(e))
+        if self._radar_state.get(url) != res['obstacle']:
+            self._radar_state[url] = res['obstacle']
+            self.emit_event('depth_obstacle', url=url, obstacle=res['obstacle'], area=res['area'],
+                            nearest=res['nearest'], model=res['model'])
+        return self.success(url=url, **res)
+
+    def execute_radar2(self, data):
+        """ wie radar, aber getrennt nach Bereichen (zones, Standard 15,70,15 = Links, Mitte, Rechts) """
+        url = str(data.get('url', '')).strip()
+        try:
+            image = self.fetch_image(url)
+            res = self.radar(image, data.get('model', 'relative') or 'relative',
+                             float(data.get('ignore_bottom', 30) or 0), float(data.get('threshold', 0.7)),
+                             float(data.get('min_area', 0.5) or 0), data, zones=data.get('zones') or '15,70,15')
+        except Exception as e:
+            return self.fail(str(e))
+        key = 'zones:' + url
+        if self._radar_state.get(key) != res['message']:
+            self._radar_state[key] = res['message']
+            self.emit_event('depth_zones', url=url, message=res['message'], obstacle=res['obstacle'],
+                            blocked=[z['name'] for z in res['zones'] if z['obstacle']],
+                            zones=[{k: z[k] for k in ('name', 'obstacle', 'area', 'nearest')} for z in res['zones']])
+        return self.success(url=url, **res)
+
+    # -- Seiten --
+
+    PAGES = [('index', 'Index'), ('imageradar', 'ImageRadar'), ('imageradar2', 'ImageRadar2')]
+
+    def part_nav(self, p: b.Page, active='index'):
+        from nxml.webui import part_nav
+        part_nav(self, p, self.PAGES, active)
+
+    def part_index(self, p: b.Page, params={}):
+        self.part_nav(p, 'index')
+        super().part_index(p, params)
+
+    def ui_imageform(self, p: b.Page):
+        """ wie ImageExecutor, zusätzlich max_length; die Dauer steht im Ergebnis (duration) """
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+            p.dropzone('dropZone', "Bild hier ablegen")
+            p.hidden('image_data', '', "image_data")
+            p.form_input('max_length', "Längste Seite (px, 0 = Original)", value=str(self.max_length),
+                         id='max_length')
+            p.script(self.JS_SHOW_RESULT_IMAGE)
+            p.form_elem(self.action_btn_parametric("Execute", dict(
+                type=self.type,
+                image='#image_data',
+                max_length='#max_length'
+            ), on_success='image_executor_on_result'))
+        p.div('', id='result_image')
+        p.pre('', id='result')
+
+    def part_imageradar(self, p: b.Page, params={}, zones=False):
+        self.part_nav(p, 'imageradar2' if zones else 'imageradar')
+        cfg = {'type': self.type, 'max_length': self.max_length, 'models': ['relative', *self.METRIC_MODELS],
+               'zones': zones}
+        p('<style>' + DEPTH_RADAR_CSS + '</style>')
+        p(DEPTH_RADAR_HTML.replace('<!--ZONES-->', DEPTH_ZONES_HTML if zones else ''))
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        p('<script>{ const DR_CFG = ' + json.dumps(cfg).replace('</', '<\\/') + ';\n' + DEPTH_RADAR_JS + '\n}</script>')
+
+    def part_imageradar2(self, p: b.Page, params={}):
+        """ ImageRadar mit Bereichen Links, Mitte, Rechts (Standard 15 %, 70 %, 15 % der Bildbreite) """
+        self.part_imageradar(p, params, zones=True)
+
+
+DEPTH_RADAR_CSS = """
+.dr { max-width: 1300px; }
+.dr-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.dr-row label { min-width: 0; }
+.dr input[type=number] { width: 80px; }
+.dr-banner { font-size: 1.5em; font-weight: bold; padding: 12px 16px; border-radius: 10px; text-align: center;
+  background: #8884; margin: 10px 0; }
+.dr-banner.free { background: #1f8f4e; color: #fff; }
+.dr-banner.blocked { background: #c62828; color: #fff; }
+.dr-banner small { display: block; font-size: .5em; font-weight: normal; margin-top: 4px; }
+.dr-images { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 800px) { .dr-images { grid-template-columns: 1fr; } }
+.dr-images figure { margin: 0; }
+.dr-images img { width: 100%; border-radius: 6px; background: #111; min-height: 80px; display: block; }
+.dr-images figcaption { font-size: .85em; opacity: .7; margin-top: 4px; }
+.dr-msg.error { color: #c33; }
+.dr-zones { display: grid; gap: 8px; margin: 10px 0; }
+.dr-zone { border-radius: 8px; padding: 10px; text-align: center; background: #8884; font-weight: bold; }
+.dr-zone.free { background: #1f8f4e; color: #fff; }
+.dr-zone.blocked { background: #c62828; color: #fff; }
+.dr-zone small { display: block; font-weight: normal; font-size: .8em; opacity: .9; }
+"""
+
+DEPTH_ZONES_HTML = """
+  <div class="dr-row">
+    <label>Bereiche % Links / Mitte / Rechts</label>
+    <input type="number" id="dr-z1" min="0" max="100" step="1" value="15" />
+    <input type="number" id="dr-z2" min="0" max="100" step="1" value="70" />
+    <input type="number" id="dr-z3" min="0" max="100" step="1" value="15" />
+    <span id="dr-zsum"></span>
+  </div>
+"""
+
+DEPTH_RADAR_HTML = """
+<div class="dr">
+  <div class="dr-row">
+    <label for="dr-url">Bild-URL</label>
+    <input type="text" id="dr-url" style="flex: 1; min-width: 280px" placeholder="http://192.168.0.20:8080/shot.jpg oder /dev/video0" />
+    <button id="dr-fetch">Abrufen</button>
+    <label><input type="checkbox" id="dr-auto" /> periodisch alle</label>
+    <input type="number" id="dr-interval" min="0.2" step="0.1" value="2" /> s
+  </div>
+  <div class="dr-row">
+    <label for="dr-model">Modell</label>
+    <select id="dr-model"><option value="relative">relativ (Nähe 0..1)</option>
+      <option value="indoor">metrisch innen (m)</option><option value="outdoor">metrisch außen (m)</option></select>
+    <label for="dr-threshold">Schwellwert</label><input type="number" id="dr-threshold" step="any" />
+    <span id="dr-unit"></span>
+    <label for="dr-area">Mindestfläche %</label><input type="number" id="dr-area" min="0" step="0.1" value="0.5" />
+    <label for="dr-ignore">unten ignorieren %</label>
+    <input type="range" id="dr-ignore" min="0" max="90" step="1" value="30" /> <span id="dr-ignore-v"></span>
+    <label for="dr-max">längste Seite px</label><input type="number" id="dr-max" min="0" step="10" />
+  </div>
+<!--ZONES-->
+  <div class="dr-banner" id="dr-banner">-<small id="dr-sub"></small></div>
+  <div class="dr-zones" id="dr-zones"></div>
+  <div class="dr-msg" id="dr-msg"></div>
+  <div class="dr-images">
+    <figure><img id="dr-depth" alt="" /><figcaption>Tiefe (hell = nah), rot = näher als Schwellwert, unterhalb der gelben Linie ignoriert, blau = Bereichsgrenzen</figcaption></figure>
+    <figure><img id="dr-photo" alt="" /><figcaption>Bild</figcaption></figure>
+  </div>
+</div>
+"""
+
+DEPTH_RADAR_JS = r"""
+(function() {
+  const cfg = DR_CFG;
+  const $ = (id) => document.getElementById(id);
+  const rootEl = $('dr-url').closest('.dr');
+  const alive = () => rootEl.isConnected;
+  const job = (data) => fetch(location.protocol + '//' + location.host + '/', { method: 'POST',
+    body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
+  const fmt = (v, n) => (v == null || isNaN(v)) ? '-' : (+v).toFixed(n == null ? 2 : n);
+  const KEY = 'nxml_depth_radar' + (cfg.zones ? '2' : '');
+  const IDS = ['dr-url', 'dr-model', 'dr-threshold', 'dr-area', 'dr-ignore', 'dr-max', 'dr-interval',
+               ...(cfg.zones ? ['dr-z1', 'dr-z2', 'dr-z3'] : [])];
+  function zoneSum() {
+    if (!cfg.zones) return;
+    const s = ['dr-z1', 'dr-z2', 'dr-z3'].reduce((a, id) => a + (+$(id).value || 0), 0);
+    $('dr-zsum').textContent = s === 100 ? '' : 'Summe ' + s + ' %, wird auf 100 % umgerechnet';
+  }
+  if (cfg.zones) ['dr-z1', 'dr-z2', 'dr-z3'].forEach((id) => $(id).addEventListener('input', zoneSum));
+  const DEFAULT_THRESHOLD = { relative: 0.7, indoor: 1.0, outdoor: 3.0 };
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+  IDS.forEach((id) => { if (saved[id] != null) $(id).value = saved[id]; });
+  if ($('dr-max').value === '') $('dr-max').value = cfg.max_length;
+  if ($('dr-threshold').value === '') $('dr-threshold').value = DEFAULT_THRESHOLD[$('dr-model').value];
+  function save() { const st = {}; IDS.forEach((id) => st[id] = $(id).value); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} }
+  function unit() {
+    $('dr-unit').textContent = $('dr-model').value === 'relative' ? 'Nähe ≥ (0..1)' : 'Meter ≤';
+    $('dr-ignore-v').textContent = $('dr-ignore').value + ' %';
+  }
+  unit(); zoneSum();
+  $('dr-model').addEventListener('change', () => { $('dr-threshold').value = DEFAULT_THRESHOLD[$('dr-model').value]; unit(); save(); });
+  $('dr-ignore').addEventListener('input', () => { unit(); save(); });
+  IDS.forEach((id) => $(id).addEventListener('change', save));
+
+  let busy = false, timer = null;
+  async function fetchOnce() {
+    if (busy || !alive()) return;
+    const url = $('dr-url').value.trim();
+    if (!url) { $('dr-msg').textContent = 'Bitte eine Bild-URL eingeben'; $('dr-msg').classList.add('error'); return; }
+    busy = true; $('dr-fetch').disabled = true;
+    const t0 = performance.now();
+    try {
+      const req = { op: cfg.zones ? 'radar2' : 'radar', url, model: $('dr-model').value, threshold: $('dr-threshold').value,
+        min_area: $('dr-area').value, ignore_bottom: $('dr-ignore').value, max_length: $('dr-max').value };
+      if (cfg.zones) req.zones = [$('dr-z1').value, $('dr-z2').value, $('dr-z3').value].join(',');
+      const r = await job(req);
+      if (!alive()) return;
+      if (!r.success) throw new Error(r.message || 'Fehler');
+      const b = $('dr-banner');
+      const nearText = (v) => r.model === 'relative' ? 'Nähe ' + fmt(v) : fmt(v) + ' m';
+      b.className = 'dr-banner ' + (r.obstacle ? 'blocked' : 'free');
+      b.firstChild.textContent = cfg.zones ? r.message : (r.obstacle ? 'Hindernis' : 'Weg frei');
+      $('dr-sub').textContent = fmt(r.area, 1) + ' % näher als Schwellwert (ab ' + fmt(r.min_area, 1) + ' %), nächster ' + nearText(r.nearest);
+      if (cfg.zones && r.zones) {
+        const box = $('dr-zones');
+        box.style.gridTemplateColumns = r.zones.map((z) => Math.max(8, z.end - z.start) + 'fr').join(' ');
+        box.innerHTML = '';
+        r.zones.forEach((z) => {
+          const el = document.createElement('div');
+          el.className = 'dr-zone ' + (z.obstacle ? 'blocked' : 'free');
+          el.textContent = z.name + (z.obstacle ? ': Hindernis' : ': frei');
+          const small = document.createElement('small');
+          small.textContent = fmt(z.area, 1) + ' %, nächster ' + nearText(z.nearest);
+          el.appendChild(small);
+          box.appendChild(el);
+        });
+      }
+      $('dr-depth').src = 'data:image/jpeg;base64,' + r.image;
+      $('dr-photo').src = 'data:image/jpeg;base64,' + r.photo;
+      $('dr-msg').classList.remove('error');
+      $('dr-msg').textContent = r.width + 'x' + r.height + ' px, Analyse ' + fmt(r.duration, 2) + ' s, gesamt ' +
+        fmt((performance.now() - t0) / 1000, 2) + ' s, Modell ' + r.model;
+    } catch (e) {
+      if (!alive()) return;
+      $('dr-msg').textContent = 'Fehler: ' + e.message; $('dr-msg').classList.add('error');
+      const b = $('dr-banner'); b.className = 'dr-banner'; b.firstChild.textContent = 'unbekannt'; $('dr-sub').textContent = '';
+    } finally {
+      busy = false;
+      if (alive()) $('dr-fetch').disabled = false;
+      schedule();
+    }
+  }
+  function schedule() {
+    clearTimeout(timer);
+    if (!alive() || !$('dr-auto').checked) return;
+    // nächster Abruf erst nach Ende des vorherigen plus Intervall, auch bei langsamer Analyse
+    timer = setTimeout(fetchOnce, Math.max(200, 1000 * (+$('dr-interval').value || 2)));
+  }
+  $('dr-fetch').addEventListener('click', fetchOnce);
+  $('dr-auto').addEventListener('change', () => { if ($('dr-auto').checked) fetchOnce(); else clearTimeout(timer); });
+  $('dr-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchOnce(); });
+})();
+"""
 
 
 class OCR(r.ImageExecutor):

@@ -71,7 +71,8 @@ DRIVE_DEFAULTS = {
 }
 
 # Einstellungen, die die Seite Einstellungen ändern kann (Typ zum Umwandeln)
-GENERAL_SETTINGS = {'backend': str, 'fov': float, 'width': int, 'event_every': int, 'push_timeout': float}
+GENERAL_SETTINGS = {'backend': str, 'fov': float, 'width': int, 'event_every': int, 'push_timeout': float,
+                    'quality_level': float, 'min_distance': int}
 
 
 # -- Mathematik --
@@ -435,8 +436,15 @@ class MonoVO:
     """
 
     def __init__(self, K, width, max_features=800, min_tracked=120, kf_interval=5, init_parallax=None,
-                 min_angle=1.0, reproj_err=2.0):
+                 min_angle=1.0, reproj_err=2.0, quality_level=0.01, min_distance=10):
+        """
+            :param quality_level: Schwellwert der Punkterkennung (goodFeaturesToTrack): eine Ecke zählt nur, wenn
+                                  sie mindestens diesen Anteil der stärksten Ecke im Bild erreicht (0.001 - 0.5)
+            :param min_distance: Mindestabstand der erkannten Punkte in Pixeln (bezogen auf die Verarbeitungsbreite)
+        """
         self.K = np.asarray(K, np.float64)
+        self.quality_level = min(0.99, max(1e-4, float(quality_level)))
+        self.min_distance = max(1, int(min_distance))
         self.max_features = int(max_features)
         self.min_tracked = int(min_tracked)
         self.kf_interval = int(kf_interval)
@@ -474,8 +482,9 @@ class MonoVO:
             return np.zeros((0, 2), np.float32)
         mask = np.full(gray.shape[:2], 255, np.uint8)
         for x, y in self.pts:
-            cv2.circle(mask, (int(x), int(y)), 10, 0, -1)
-        c = cv2.goodFeaturesToTrack(gray, maxCorners=int(n), qualityLevel=0.01, minDistance=10, mask=mask,
+            cv2.circle(mask, (int(x), int(y)), self.min_distance, 0, -1)
+        c = cv2.goodFeaturesToTrack(gray, maxCorners=int(n), qualityLevel=self.quality_level,
+                                    minDistance=self.min_distance, mask=mask,
                                     blockSize=7)
         return np.zeros((0, 2), np.float32) if c is None else c.reshape(-1, 2).astype(np.float32)
 
@@ -801,7 +810,9 @@ class SlamSession:
                     if np.any(dist != 0):
                         undistort = cv2.initUndistortRectifyMap(K, dist, None, K, (w, h), cv2.CV_16SC2)
                     vo = MonoVO(K, w, max_features=p.get('max_features', 800), kf_interval=p.get('kf_interval', 5),
-                                min_angle=p.get('min_angle', 1.5))
+                                min_angle=p.get('min_angle', 1.5), quality_level=p.get('quality_level', 0.01),
+                                min_distance=p.get('min_distance', 10))
+                    self.log.append(f'Punkterkennung: qualityLevel={vo.quality_level}, minDistance={vo.min_distance}')
                     self.size = [w, h]
                     self.log.append(f'Bildgröße {w}x{h}, fx={K[0, 0]:.1f}')
                 if undistort is not None:
@@ -1136,7 +1147,7 @@ class SlamRunner(r.BaseJobExecutor):
 
     def __init__(self, type='slam', work_dir=None, backend='auto', width=640, fov=70, event_every=1,
                  stella_bin='run_video_slam', stella_vocab='', stella_viewer='none', stella_args='',
-                 push_timeout=60, pointcloud_type='pointcloud'):
+                 push_timeout=60, pointcloud_type='pointcloud', quality_level=0.01, min_distance=10):
         """
             :param work_dir: Arbeitsverzeichnis, Standard <tmp>/nxml_slam, wird bei Bedarf angelegt
             :param backend: auto, opencv oder stella
@@ -1148,6 +1159,8 @@ class SlamRunner(r.BaseJobExecutor):
             :param stella_viewer: Wert für --viewer (none, pangolin_viewer, ...), leer = Option weglassen
             :param stella_args: weitere Argumente für run_video_slam
             :param push_timeout: Sekunden ohne gesendetes Bild, nach denen ein Push-Lauf endet
+            :param quality_level: Schwellwert der Punkterkennung (opencv), höher = weniger, stärkere Punkte
+            :param min_distance: Mindestabstand erkannter Punkte in Pixeln (opencv)
         """
         super().__init__(type)
         self.work_dir = work_dir or os.path.join(tempfile.gettempdir(), 'nxml_slam')
@@ -1161,6 +1174,8 @@ class SlamRunner(r.BaseJobExecutor):
         self.stella_args = stella_args
         self.push_timeout = float(push_timeout)
         self.pointcloud_type = pointcloud_type
+        self.quality_level = float(quality_level)
+        self.min_distance = int(min_distance)
         self.sessions = {}
         self._vocab_lock = threading.Lock()
         self.drive = dict(DRIVE_DEFAULTS)
@@ -1214,6 +1229,9 @@ class SlamRunner(r.BaseJobExecutor):
         self.define_sig(d.PStr('op', 'clear_tmp'))\
             .set_description("Tmp-Ordner leeren: beendete Läufe und Uploads löschen, laufende bleiben")\
             .r(success='bool', removed='int', freed='int')
+        self.define_sig(d.PStr('op', 'clean_files'))\
+            .set_description("Alles aufräumen: Läufe stoppen, Sessions, Uploads, ORB-Vokabular und Einstellungen "
+                             "im Arbeitsverzeichnis löschen").r(success='bool', removed='list', freed='int')
 
     # Hilfen
 
@@ -1271,7 +1289,7 @@ class SlamRunner(r.BaseJobExecutor):
     # Operationen
 
     PARAM_KEYS = ['fov', 'width', 'frame_skip', 'realtime', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3',
-                  'max_features', 'kf_interval', 'min_angle']
+                  'max_features', 'kf_interval', 'min_angle', 'quality_level', 'min_distance']
 
     def execute_start(self, data):
         if cv2 is None:
@@ -1287,15 +1305,16 @@ class SlamRunner(r.BaseJobExecutor):
         return self.success(session=s.id, backend=backend, folder=s.folder)
 
     def create_session(self, source, backend, data, push_source=None) -> SlamSession:
-        params = {'fov': self.fov, 'width': self.width, 'frame_skip': 1, 'realtime': False}
+        params = {'fov': self.fov, 'width': self.width, 'frame_skip': 1, 'realtime': False,
+                  'quality_level': self.quality_level, 'min_distance': self.min_distance}
         for key in self.PARAM_KEYS:
             if key in data and str(data[key]).strip() != '':
                 params[key] = data[key]
         params['realtime'] = str(params.get('realtime', 0)) in ('1', 'true', 'True', 'on')
-        for key in ('fov', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'min_angle'):
+        for key in ('fov', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3', 'min_angle', 'quality_level'):
             if key in params:
                 params[key] = float(params[key])
-        for key in ('width', 'frame_skip', 'max_features', 'kf_interval'):
+        for key in ('width', 'frame_skip', 'max_features', 'kf_interval', 'min_distance'):
             if key in params:
                 params[key] = int(float(params[key]))
         session_id = time.strftime('%Y%m%d-%H%M%S-') + u.guid()[:6]
@@ -1480,6 +1499,10 @@ class SlamRunner(r.BaseJobExecutor):
                     drive[key] = str(value).lower() in ('1', 'true', 'on', 'yes')
                 else:
                     drive[key] = type(default)(float(value))
+        if 'quality_level' in general and not 0 < general['quality_level'] < 1:
+            raise ValueError('qualityLevel muss zwischen 0 und 1 liegen')
+        if 'min_distance' in general and general['min_distance'] < 1:
+            raise ValueError('minDistance muss mindestens 1 sein')
         for key, value in general.items():
             setattr(self, key, value)
         self.drive.update(drive)
@@ -1560,6 +1583,52 @@ class SlamRunner(r.BaseJobExecutor):
         self.info(f'Tmp geleert: {removed} Einträge, {freed} Bytes')
         return self.success(f'{removed} Einträge gelöscht, {freed / 1e6:.1f} MB frei, {len(running)} laufende behalten',
                             removed=removed, freed=freed, kept=sorted(running), usage=self.tmp_usage())
+
+    # vom Runner im work_dir angelegte Einträge; nur diese löscht clean_files
+    OWN_FILES = ('sessions', 'uploads', 'orb_vocab.fbow', 'settings.json')
+
+    def clean_files(self, wait=10):
+        """
+        Räumt alles auf, was der Runner angelegt hat: stoppt laufende Sessions und löscht im Arbeitsverzeichnis
+        sessions/, uploads/, das ORB-Vokabular und settings.json. work_dir selbst wird nur entfernt, wenn danach
+        nichts anderes mehr darin liegt (es kann ein eigenes Verzeichnis sein). Die Einstellungen im Speicher bleiben
+        bis zum Neustart aktiv.
+
+          :param wait: Sekunden, die auf das Ende laufender Sessions gewartet wird
+        """
+        running = [s for s in self.sessions.values() if s.is_running()]
+        for s in running:
+            s.stop()
+        deadline = time.time() + wait
+        while any(s.is_running() for s in running) and time.time() < deadline:
+            time.sleep(0.2)
+        still = [s.id for s in running if s.is_running()]
+        if still:
+            return self.fail(f'Sessions laufen noch: {", ".join(still)}, nichts gelöscht', running=still)
+        before = self.folder_size(self.work_dir) if os.path.isdir(self.work_dir) else 0
+        removed = []
+        for name in self.OWN_FILES:
+            path = os.path.join(self.work_dir, name)
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+            elif os.path.lexists(path):
+                os.remove(path)
+            else:
+                continue
+            removed.append(path)
+        self.sessions.clear()
+        self._drive_free.clear()
+        if os.path.isdir(self.work_dir) and not os.listdir(self.work_dir):
+            os.rmdir(self.work_dir)
+            removed.append(self.work_dir)
+        freed = before - (self.folder_size(self.work_dir) if os.path.isdir(self.work_dir) else 0)
+        self.info(f'Aufgeräumt: {len(removed)} Einträge, {freed} Bytes')
+        return self.success(f'{len(removed)} Einträge gelöscht, {freed / 1e6:.1f} MB frei', removed=removed,
+                            freed=freed)
+
+    def execute_clean_files(self, data={}):
+        """ op=clean_files: siehe clean_files """
+        return self.clean_files()
 
     # -- Drive Radar --
 
@@ -1733,11 +1802,9 @@ class SlamRunner(r.BaseJobExecutor):
     PAGES = [('index', 'Main'), ('drive', 'Drive Radar'), ('settings', 'Einstellungen')]
 
     def part_nav(self, p: b.Page, active='index'):
-        items = [(title, self.dispatcher_link(name), name) for name, title in self.PAGES]
-        p.nav(*[(t, url) for t, url, _ in items], active=self.dispatcher_link(active), _class='slam-nav',
-              data_type=self.type)
-        # in der UI v2 die Seiten im Inhaltsbereich wechseln statt die UI zu verlassen
-        p('<script>{ const SLAM_NAV_TYPE = ' + json.dumps(self.type) + ';\n' + SLAM_NAV_JS + '\n}</script>')
+        # in der UI v2 werden die Seiten im Inhaltsbereich gewechselt statt die UI zu verlassen
+        from nxml.webui import part_nav
+        part_nav(self, p, self.PAGES, active, css_class='slam-nav')
 
     def script(self, p: b.Page, name, cfg, js):
         cfg_json = json.dumps(cfg).replace('</', '<\\/')
@@ -2458,33 +2525,6 @@ SLAM_JS = r"""
 """
 
 
-SLAM_NAV_JS = r"""
-(function() {
-  // UI v2 (/pysys/ui): Seiten des Runners im Inhaltsbereich laden, sonst normale Links
-  const T = SLAM_NAV_TYPE;
-  const navs = document.querySelectorAll('nav.slam-nav[data-type="' + T + '"]');
-  const nav = navs[navs.length - 1], content = document.getElementById('content');
-  if (!nav || !content || !content.contains(nav) || location.pathname.indexOf('/pysys/ui') !== 0) return;
-  nav.addEventListener('click', (e) => {
-    const a = e.target.closest('a');
-    if (!a) return;
-    const page = new URL(a.href, location.href).searchParams.get(T);
-    if (!page) return;
-    e.preventDefault();
-    fetch('/', { method: 'POST', body: new URLSearchParams({ type: T, page }) }).then((r) => r.json()).then((r) => {
-      if (!r.success) { a.title = r.message || 'Fehler'; return; }
-      content.innerHTML = r.content + (r.intern_links || '');
-      content.querySelectorAll('script').forEach((old) => {
-        const s = document.createElement('script');
-        [...old.attributes].forEach((at) => s.setAttribute(at.name, at.value));
-        s.textContent = old.textContent;
-        old.replaceWith(s);
-      });
-    });
-  });
-})();
-"""
-
 DRIVE_CSS = """
 .drive-banner { font-size: 1.6em; font-weight: bold; padding: 14px 18px; border-radius: 10px; text-align: center;
   background: #8884; transition: background .2s; }
@@ -2675,6 +2715,17 @@ SETTINGS_HTML = """
     <div class="slam-row"><label for="set-push_timeout">Push-Timeout (s)</label><input type="number" id="set-push_timeout" min="1" step="1" /></div>
   </div>
   <div class="slam-card" style="margin-top: 12px">
+    <h3>Punkterkennung (opencv)</h3>
+    <div class="slam-row"><label for="set-quality_level">Schwellwert (qualityLevel)</label>
+      <input type="number" id="set-quality_level" min="0.0001" max="0.99" step="0.001" />
+      <span class="slam-legend">Anteil der stärksten Ecke im Bild, ab dem ein Punkt zählt. Höher = weniger, stärkere Punkte
+        (z.B. 0.05), niedriger = mehr Punkte auch in schwach strukturierten Bereichen (z.B. 0.005). Standard 0.01</span></div>
+    <div class="slam-row"><label for="set-min_distance">Mindestabstand (minDistance, px)</label>
+      <input type="number" id="set-min_distance" min="1" max="200" step="1" />
+      <span class="slam-legend">Abstand zwischen erkannten Punkten, bezogen auf die Verarbeitungsbreite. Kleiner = dichter. Standard 10</span></div>
+    <div class="slam-legend">Gilt für neu gestartete Läufe.</div>
+  </div>
+  <div class="slam-card" style="margin-top: 12px">
     <h3>Drive Radar</h3>
     <div class="slam-row"><label for="set-drive_angle">Öffnungswinkel °</label><input type="number" id="set-drive_angle" min="5" max="180" step="1" /></div>
     <div class="slam-row"><label for="set-drive_range">Reichweite</label><input type="number" id="set-drive_range" min="0.01" step="any" /></div>
@@ -2703,7 +2754,7 @@ SETTINGS_JS = r"""
   const $ = (id) => document.getElementById(id);
   const job = (data) => fetch(location.protocol + '//' + location.host + '/', { method: 'POST',
     body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
-  const GENERAL = ['backend', 'fov', 'width', 'event_every', 'push_timeout'];
+  const GENERAL = ['backend', 'fov', 'width', 'event_every', 'push_timeout', 'quality_level', 'min_distance'];
   const DRIVE = ['angle', 'range', 'check', 'lower', 'up_angle', 'threshold'];
   function usage(u, dir) {
     $('set-workdir').textContent = dir || '';

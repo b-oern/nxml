@@ -68,6 +68,8 @@ if __name__ == '__main__':
                 'face_similarity = nxml.vision.face:FaceSimilarity',
                 'slam = nxml.vision.slam:SlamRunner',
                 'pointcloud = nxml.vision.pointcloud:PointCloudRunner',
+                'bon = nxml.vision.ocr:BonReader',
+                'deepseek_ocr = nxml.vision.ocr:DeepSeekOcr',
                 'comfyui = nxml.comfyui:ComfyUi',
                 'imap = nxml.data:Imap'
             ]
