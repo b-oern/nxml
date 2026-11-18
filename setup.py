@@ -58,6 +58,7 @@ if __name__ == '__main__':
                 'gemini = nxml.llm:Gemini',
                 'lmstudio = nxml.llm:LMStudio',
                 'remote_lmstudio = nxml.remote.llm:RemoteLmStudio',
+                'remote_comfy = nxml.remote.comfy:RemoteComfy',
                 'vision = nxml.llm:Vision',
                 'tt = nxml.llm:TransformText',
                 'llmproxy = nxml.proxy:LlmProxy',

@@ -459,7 +459,7 @@ class ObjectDetector(r.ImageExecutor):
     """
 
     MODULES = ['scipy', 'torch', 'transformers']
-    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR, 'hugging']
     type = 'od'
 
     def __init__(self):
@@ -731,7 +731,7 @@ class Aesthetics(r.ImageExecutor):
     """
     https://github.com/shunk031/simple-aesthetics-predictor
     """
-    TAGS = [TAG.IMAGE]
+    TAGS = [TAG.IMAGE, 'hugging']
 
     META_NAME = 'aesthetics'
 
@@ -880,6 +880,7 @@ class DepthEstimation(r.ImageExecutor):
      - indoor / outdoor: metrische Modelle (Depth-Anything-V2-Metric-*-Small-hf), Entfernung in Metern, werden beim
        ersten Gebrauch geladen.
     """
+    TAGS = ['hugging']
 
     MODULES = ['scipy', 'transformers']
 
@@ -1548,7 +1549,7 @@ class OcrAi(r.ImageExecutor):
     Deutlich besser als OCR bei Fotos, Handschrift-ähnlichen Schriften, Tabellen, Formeln und Layouts;
     format=1 liefert formatierten Text (Markdown/LaTeX). Braucht PyTorch, auf CPU langsam, GPU empfohlen.
     """
-    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR, 'hugging']
 
     MODULES = ['scipy', 'torch', 'transformers>=4.49', 'accelerate']
 

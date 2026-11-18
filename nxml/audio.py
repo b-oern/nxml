@@ -8,6 +8,8 @@ from nwebclient import util as u
 from nwebclient import base as b
 from nwebclient import dev as d
 
+from nxml.hugging import HuggingRunner
+
 
 class LibRosa(r.BaseJobExecutor):
     """
@@ -58,21 +60,28 @@ class LibRosa(r.BaseJobExecutor):
         return super().execute(data)
 
 
-class CommandRecognition(r.BaseJobExecutor):
+class CommandRecognition(HuggingRunner, r.BaseJobExecutor):
     """
-      Erkennt ein Aktivierungswort in einem Audio-Stream
+      Erkennt ein Aktivierungswort in einem Audio-Stream (~0,4 GB VRAM, AST mit 87M Parametern fp32).
     """
+    TAGS = ['hugging']
     MODULES = ['datasets', 'soundfile', 'librosa', 'transformers']
 
-    def __init__(self, model="MIT/ast-finetuned-speech-commands-v2"):
+    model_name = "MIT/ast-finetuned-speech-commands-v2"
+    HF_MODEL_ATTRS = ('classifier',)
+
+    def __init__(self, model=None, device_mode='auto'):
         super().__init__('speech_reg')
-        from transformers import pipeline
-        self.classifier = pipeline("audio-classification", model=model)
+        self.hf_init(model, device_mode)
         self.define_sig(d.Param('audio')).set_description("Erkennt gesprochene Befehlswörter in Audio")\
             .r(result='list')
         self.param_names['audio'] = "{'path': 'down/1816b768_nohash_0.wav', 'array': array([ 0.00079346, -0.00543213, -0.00054932, ..., -0.00717163,-0.00415039, -0.00811768]), 'sampling_rate': 16000}"
 
+    def load_model(self):
+        self.classifier = self.hf_pipeline("audio-classification")
+
     def predict(self, audio):
+        self.load()
         return {'result': self.classifier(audio)}
         # [{'score': 0.9999892711639404, 'label': 'backward'},{'score': 1.7504888774055871e-06, 'label': 'happy'}, ...
 
@@ -82,8 +91,9 @@ class CommandRecognition(r.BaseJobExecutor):
         return super().execute(data)
 
 
-class VoiceAssitant(r.BaseJobExecutor):
+class VoiceAssitant(HuggingRunner, r.BaseJobExecutor):
     """
+    Wartet am Mikrofon auf ein Aktivierungswort (~0,4 GB VRAM, AST mit 87M Parametern fp32).
 
     # https://huggingface.co/learn/audio-course/chapter4/classification_models
     # https://huggingface.co/learn/audio-course/chapter7/voice-assistant
@@ -92,10 +102,18 @@ class VoiceAssitant(r.BaseJobExecutor):
 
     via https://huggingface.co/learn/audio-course/chapter7/voice-assistant
     """
-    def __init__(self, model="MIT/ast-finetuned-speech-commands-v2"):
+    TAGS = ['hugging']
+    MODULES = ['transformers', 'torch']
+
+    model_name = "MIT/ast-finetuned-speech-commands-v2"
+    HF_MODEL_ATTRS = ('classifier',)
+
+    def __init__(self, model=None, device_mode='auto'):
         super().__init__()
-        from transformers import pipeline
-        self.classifier = pipeline("audio-classification", model=model)
+        self.hf_init(model, device_mode)
+
+    def load_model(self):
+        self.classifier = self.hf_pipeline("audio-classification")
 
     def launch_fn(self, wake_word="marvin", prob_threshold=0.5, chunk_length_s=2.0, stream_chunk_s=0.25, debug=False):
         """
@@ -112,6 +130,7 @@ class VoiceAssitant(r.BaseJobExecutor):
         :return:
         """
         from transformers.pipelines.audio_utils import ffmpeg_microphone_live
+        self.load()
         if wake_word not in self.classifier.model.config.label2id.keys():
             raise ValueError(f"Wake word {wake_word} not in set of valid class labels, pick a wake word in the set {self.classifier.model.config.label2id.keys()}.")
         sampling_rate = self.classifier.feature_extractor.sampling_rate
@@ -129,20 +148,73 @@ class VoiceAssitant(r.BaseJobExecutor):
         return super().execute(data)
 
 
-class AudioGenerator(r.BaseJobExecutor):
+class AudioGenerator(HuggingRunner, r.BaseJobExecutor):
     """
+    Erzeugt Musik aus einer Textbeschreibung (MusicGen) und speichert sie als WAV-Datei (~2,5 GB VRAM, musicgen-small fp32 inkl. T5-Encoder).
+
     see also https://huggingface.co/spaces/artificialguybr/Stable-Audio-Open-Zero
     https://huggingface.co/facebook/musicgen-small
-    """
-    def __init__(self):
-        super().__init__()
-        from transformers import pipeline
-        self.synthesiser = pipeline("text-to-audio", "facebook/musicgen-small")
 
-    def generate(self, prompt="lo-fi music with a soothing melody", data={}):
-        import scipy
-        music = self.synthesiser(prompt, forward_params={"do_sample": True})
-        scipy.io.wavfile.write("musicgen_out.wav", rate=music["sampling_rate"], data=music["audio"])
+      g = AudioGenerator()
+      g.execute({'op': 'generate', 'prompt': 'lo-fi music with a soothing melody', 'filename': 'lofi.wav'})
+
+    Das Modell wird lazy beim ersten Aufruf geladen.
+    """
+    TAGS = ['audio-out', 'hugging']
+    MODULES = ['transformers', 'torch', 'scipy', 'numpy']
+
+    model_name = "facebook/musicgen-small"
+    # MusicGen erzeugt 50 Audio-Tokens pro Sekunde, 256 Tokens sind ca. 5 s
+    max_new_tokens = 256
+
+    HF_MODEL_ATTRS = ('synthesiser',)
+
+    def __init__(self, type='audio_gen', model_name=None, device_mode='auto'):
+        """
+            :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
+        """
+        super().__init__(type)
+        self.hf_init(model_name, device_mode)
+        self.define_vars('max_new_tokens')
+        self.define_sig(d.PStr('op', 'generate'), d.Param('prompt'), d.PStr('filename', 'musicgen_out.wav'),
+                        d.PInt('max_new_tokens', self.max_new_tokens))\
+            .set_description("Erzeugt Musik aus einer Textbeschreibung und speichert sie als WAV-Datei")\
+            .r_success(filename='str', sampling_rate='int', duration='float')
+
+    def load_model(self):
+        self.synthesiser = self.hf_pipeline("text-to-audio")
+
+    def generate(self, prompt="lo-fi music with a soothing melody", filename='musicgen_out.wav', max_new_tokens=None):
+        """
+            :return: {'filename': str, 'sampling_rate': int, 'duration': float}
+        """
+        import numpy as np
+        from scipy.io import wavfile
+        self.load()
+        music = self.synthesiser(prompt, forward_params={
+            'do_sample': True,
+            'max_new_tokens': int(max_new_tokens or self.max_new_tokens)
+        })
+        rate = int(music['sampling_rate'])
+        # Pipeline liefert (Kanäle, Samples), scipy erwartet (Samples, Kanäle) bzw. 1D bei Mono
+        audio = np.asarray(music['audio'], dtype=np.float32)
+        while audio.ndim > 2:
+            audio = audio[0]
+        if audio.ndim == 2:
+            audio = audio[0] if audio.shape[0] == 1 else audio.T
+        wavfile.write(filename, rate=rate, data=audio)
+        return {'filename': filename, 'sampling_rate': rate, 'duration': round(len(audio) / rate, 3)}
+
+    def execute_generate(self, data):
+        if not data.get('prompt'):
+            return self.fail("prompt fehlt")
+        res = self.generate(data['prompt'], data.get('filename') or 'musicgen_out.wav', data.get('max_new_tokens'))
+        return self.success(**res)
+
+    def execute(self, data):
+        if 'prompt' in data and 'op' not in data:
+            return self.execute_generate(data)
+        return super().execute(data)
 
 
 class FFmpeg(r.BaseJobExecutor):

@@ -5,11 +5,14 @@ from nwebclient import util
 from nwebclient import dev
 from nwebclient import base as b
 from nwebclient import dev as d
+from nwebclient import web
 import os
 import os.path
 import base64
 import io
 import requests
+
+from nxml.hugging import HuggingRunner
 
 
 class Whisper(runner.BaseJobExecutor):
@@ -59,6 +62,7 @@ class Toxity(runner.BaseJobExecutor):
     Bewertet Texte mit Detoxify (multilingual) auf Toxizität, Beleidigungen, Drohungen und ähnliches.
     """
     MODULES = ['detoxify']
+    TAGS = ['nlp']
     text_key = 'text'
 
     def __init__(self):
@@ -71,12 +75,65 @@ class Toxity(runner.BaseJobExecutor):
     def execute(self, data):
         if isinstance(data, str):
             data = {'text': data}
+        if self.text_key not in data:
+            return super().execute(data)
         text = data[self.text_key]
         tv = self.classifier_toxity.predict(text)
         data['toxity'] = dict(map(lambda kv: (kv[0], float(kv[1])), tv.items()))
         # {'toxicity': 0.00019621708, 'severe_toxicity': 0.00019254998, 'obscene': 0.0012626372, 'identity_attack': 0.0003226225, 'insult': 0.0008828422, 'threat': 0.00013756882, 'sexual_explicit': 9.029167e-05}
         data['success'] = True
         return data
+
+    LABELS = {
+        'toxicity': "Toxizität",
+        'severe_toxicity': "Starke Toxizität",
+        'obscene': "Obszön",
+        'identity_attack': "Angriff auf Identität",
+        'insult': "Beleidigung",
+        'threat': "Drohung",
+        'sexual_explicit': "Sexuell explizit",
+    }
+
+    EXAMPLES = [
+        ("Freundlich", "Vielen Dank für die schnelle Hilfe, das hat mir sehr geholfen!"),
+        ("Kritik", "Der Vortrag war leider ziemlich langweilig und schlecht vorbereitet."),
+        ("Beleidigung", "Du bist ein kompletter Idiot und hast keine Ahnung."),
+        ("English", "This is a great idea, thanks for sharing."),
+    ]
+
+    RENDER_JS = """
+        function toxity_render(data) {
+            var labels = %s;
+            var tv = (data && data.toxity) || {};
+            var h = '';
+            for (var k in tv) {
+                var v = tv[k];
+                var color = v >= 0.5 ? '#d9534f' : (v >= 0.1 ? '#f0ad4e' : '#5cb85c');
+                h += '<div style="display:flex;gap:8px;align-items:center;margin:2px 0">' +
+                     '<span style="width:180px">' + (labels[k] || k) + '</span>' +
+                     '<span style="display:inline-block;height:12px;width:' + Math.max(1, v * 300) + 'px;background:' + color + '"></span>' +
+                     '<span>' + (v * 100).toFixed(1) + ' %%</span></div>';
+            }
+            if (h === '') h = '<div>Kein Ergebnis: ' + ((data && data.message) || '') + '</div>';
+            document.getElementById('toxity_view').innerHTML = h;
+            document.getElementById('result').innerText = JSON.stringify(data, null, 2);
+        }
+    """
+
+    def part_index(self, p: base.Page, params={}):
+        with p.section(h="Toxizität (Detoxify multilingual)"):
+            p.div("Wahrscheinlichkeit je Kategorie, ab 50 % rot, ab 10 % gelb. "
+                  "Mehrsprachig (u.a. Deutsch und Englisch).")
+            p.script(self.RENDER_JS % json.dumps(self.LABELS) +
+                     'var toxity_examples = ' + json.dumps([t for _, t in self.EXAMPLES]) + ';'
+                     'function toxity_example(i) { document.getElementById("toxity_text").value = toxity_examples[i]; }')
+            p.div("Beispiele: " + ' '.join(web.button_js(title, f'toxity_example({i})')
+                                             for i, (title, _) in enumerate(self.EXAMPLES)))
+            p('<textarea id="toxity_text" name="text" style="width:90%; height:120px"></textarea>')
+            p.div(self.action_btn_parametric("Bewerten", dict(type=self.type, text='#toxity_text'),
+                                             on_success='toxity_render', hint="Text mit Detoxify bewerten"))
+            p.div('', id='toxity_view')
+            p.pre('', id='result')
 
 
 class Nltk(runner.BaseJobExecutor):
@@ -120,8 +177,7 @@ class FlairRunner(runner.BaseJobExecutor):
     MODULES = ['flair']
 
     def __init__(self, model="flair/ner-english-ontonotes-large"):
-        super().__init__()
-        self.type='flair'
+        super().__init__('flair')
         try:
             from flair.models import SequenceTagger
             self.tagger = SequenceTagger.load(model)
@@ -163,26 +219,43 @@ class FlairRunner(runner.BaseJobExecutor):
         p.pre('', id='result')
 
 
-class BertEmbeddings(runner.BaseJobExecutor):
+class BertEmbeddings(HuggingRunner, runner.BaseJobExecutor):
     """
-    Berechnet Text-Embeddings mit dem Sentence-Transformer all-MiniLM-L6-v2.
+    Berechnet Text-Embeddings mit dem Sentence-Transformer all-MiniLM-L6-v2 (~0,1 GB VRAM, 22M Parameter fp32).
     """
+    TAGS = ['hugging']
     MODULES = ['transformers', 'langchain', 'sentence_transformers', 'langchain-huggingface']
-    model = "all-MiniLM-L6-v2"
+    # Kurzname wie in embedding_model gespeichert, auf dem Hub sentence-transformers/<name>
+    model_name = "all-MiniLM-L6-v2"
+    HF_MODEL_ATTRS = ('embeddings',)
 
-    def __init__(self):
+    def __init__(self, model_name=None, device_mode='auto'):
         super().__init__()
-        #from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
-        from langchain_huggingface import HuggingFaceEmbeddings
-        self.embeddings = HuggingFaceEmbeddings(model_name=self.model)
+        self.hf_init(model_name, device_mode)
         self.define_sig(d.Param('text')).set_description("Erstellt ein Text-Embedding (Sentence-Transformer)")\
             .r(embedding='list', embedding_model='str', success='bool')
 
+    @property
+    def model(self):
+        """ früherer Name von model_name """
+        return self.model_name
+
+    def hf_models(self):
+        return [self.model_name if '/' in self.model_name else 'sentence-transformers/' + self.model_name]
+
+    def load_model(self):
+        #from langchain.embeddings import HuggingFaceEmbeddings, SentenceTransformerEmbeddings
+        from langchain_huggingface import HuggingFaceEmbeddings
+        self.embeddings = HuggingFaceEmbeddings(model_name=self.model_name, model_kwargs={'device': self.device})
+
     def execute(self, data):
+        if 'text' not in data:
+            return super().execute(data)
         try:
+            self.load()
             embedding = self.embeddings.embed_documents([data['text']])
             data['embedding'] = embedding[0]
-            data['embedding_model'] = self.model
+            data['embedding_model'] = self.model_name
             data['success'] = True
         except Exception as e:
             print("Error: " + str(e))
@@ -276,27 +349,21 @@ class AgeAndGenderRunner(runner.ImageExecutor):
         return {'prediction': result, 's': str(result), 'img': str(image)}
 
 
-class ClipEmbeddings(runner.BaseJobExecutor):
+class ClipEmbeddings(HuggingRunner, runner.BaseJobExecutor):
     """
-      Erstellt Embeddings für Texte oder Bild
+      Erstellt CLIP-Embeddings für Texte oder Bilder (~0,9 GB VRAM: CLIPModel und CLIPTextModel, fp32).
 
     """
+    TAGS = ['hugging']
     MODULES = ['transformers', 'pillow', 'torch']
-    model_id = 'openai/clip-vit-base-patch16'
+    model_name = 'openai/clip-vit-base-patch16'
     text_key = 'text'
     image_key = 'image'
+    HF_MODEL_ATTRS = ('tokenizer', 'text_encoder', 'model', 'processor')
 
-    def __init__(self):
+    def __init__(self, model_name=None, device_mode='auto'):
         super().__init__()
-        import torch
-        from torch.nn import CosineSimilarity
-        from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, AutoProcessor
-        self.torch_device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.tokenizer = CLIPTokenizer.from_pretrained(self.model_id)
-        self.text_encoder = CLIPTextModel.from_pretrained(self.model_id).to(self.torch_device)
-        self.model = CLIPModel.from_pretrained(self.model_id).to(self.torch_device)
-        self.img_model = CLIPModel.from_pretrained(self.model_id)
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        self.hf_init(model_name, device_mode)
         self.define_sig(d.Param(self.text_key)).set_description("CLIP-Features und Token-Embeddings eines Textes")\
             .r(features='list', embeddings='list', success='bool')
         self.define_sig(d.Param(self.image_key)).set_description("CLIP-Features eines Bildes (Base64)")\
@@ -308,19 +375,40 @@ class ClipEmbeddings(runner.BaseJobExecutor):
         with open(filename, "rb") as f:
             return base64.b64encode(f.read()).decode('ascii')
 
+    @property
+    def model_id(self):
+        """ früherer Name von model_name """
+        return self.model_name
+
+    @property
+    def torch_device(self):
+        return self.device
+
+    def load_model(self):
+        from transformers import CLIPTokenizer, CLIPModel, CLIPTextModel, AutoProcessor
+        self.tokenizer = self.hf_pretrained(CLIPTokenizer, to_device=False)
+        self.text_encoder = self.hf_pretrained(CLIPTextModel)
+        self.model = self.hf_pretrained(CLIPModel)
+        self.processor = self.hf_pretrained(AutoProcessor, to_device=False)
+
     def calculate_image_embedding(self, img):
-        inputs = self.processor(images=img, return_tensors="pt")
-        features = self.img_model.get_image_features(**inputs)
+        self.load()
+        inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+        features = self.model.get_image_features(**inputs)
         return features.cpu().detach().numpy().astype(float)
 
     def calculate_text_embedding(self, text):
+        self.load()
         text_inputs = self.tokenizer([text], padding="max_length", return_tensors="pt").to(self.torch_device)
         text_features = self.model.get_text_features(**text_inputs)
         return text_features.cpu().detach().numpy()
 
     def execute(self, data):
         # https://huggingface.co/docs/transformers/model_doc/clip
+        if not any(k in data for k in ('image_filename', self.text_key, self.image_key)):
+            return super().execute(data)
         import torch
+        self.load()
         if 'image_filename' in data:
             data[self.image_key] = self.load_image(data['image_filename'])
         if self.text_key in data:

@@ -142,7 +142,7 @@ class BonReader(r.ImageExecutor):
     Ausgabe: {success: true, items: [{title: "Brot", amount: 1, price: 3.5}], retailer: "Rewe"}
     https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct
     """
-    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR, 'hugging']
 
     MODULES = ['torch', 'torchvision', 'transformers>=4.49', 'accelerate', 'bitsandbytes']
 
@@ -360,16 +360,184 @@ DEEPSEEK_UI_CSS = """
 .ds-msg { min-height: 1.2em; margin: 4px 0; }
 """
 
+DEEPSEEK_RESULT_CSS = """
+.dsr { margin: 10px 0; }
+.dsr-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.dsr-bar .dsr-info { opacity: .7; margin-right: auto; }
+.dsr-err { padding: 10px 14px; border-radius: 8px; background: #fadcdc; color: #7a1717; white-space: pre-wrap; }
+.dsr-body { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.dsr-img { position: relative; flex: 1 1 320px; max-width: 560px; }
+.dsr-img img { display: block; width: 100%; height: auto; }
+.dsr-img svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dsr-img rect { fill: transparent; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.dsr-img rect:hover { fill: rgba(255, 200, 0, .25); }
+.dsr-text { flex: 2 1 380px; min-width: 0; overflow-x: auto; }
+.dsr-text pre { white-space: pre-wrap; margin: 0; }
+.dsr-text table { border-collapse: collapse; margin: 6px 0; }
+.dsr-text td, .dsr-text th { border: 1px solid rgba(127,127,127,.5); padding: 2px 6px; }
+.dsr-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; margin-top: 4px; }
+.dsr-legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 4px;
+                           border: 2px solid var(--c); vertical-align: -1px; }
+"""
+
+# Callback für das Bildformular (imagejobformat_function), wird über js() in die Seite eingebunden
+DEEPSEEK_RESULT_JS = r"""
+function deepseek_ocr_on_result(data) {
+  if (typeof show_error === 'function') show_error(data);
+  const $box = document.getElementById('result_image');
+  if (!$box) return;
+  $box.innerHTML = '';
+  const $json = document.getElementById('result');
+  if ($json) $json.style.display = 'none';
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
+                                   if (text != null) e.textContent = text; return e; };
+  const root = el('div', 'dsr');
+  $box.appendChild(root);
+  if (!data || !data.success) {
+    root.appendChild(el('div', 'dsr-err', 'OCR fehlgeschlagen: ' + ((data && data.message) || 'unbekannter Fehler')));
+    return;
+  }
+  const boxes = Array.isArray(data.boxes) ? data.boxes : [];
+  const text = data.text || '';
+  const rich = data.mode === 'markdown' || data.mode === 'figure' || /<table|^\s*\|.*\|\s*$|^#{1,6} /m.test(text);
+
+  // Leiste: Infos und Aktionen
+  const bar = el('div', 'dsr-bar');
+  bar.appendChild(el('span', 'dsr-info', 'Modus ' + (data.mode || '-') + ' · ' + text.length + ' Zeichen · '
+    + boxes.length + ' Boxen · ' + (data.duration != null ? data.duration + ' s' : '')));
+  const btn = (label, tip, fn) => { const b = el('button', null, label); b.type = 'button'; b.title = tip;
+                                     b.onclick = fn; bar.appendChild(b); return b; };
+  let showRich = rich;
+  const $toggle = btn('', 'Zwischen formatierter Ansicht (Markdown/Tabellen) und dem reinen Text umschalten',
+                      () => { showRich = !showRich; renderText(); });
+  btn('Text kopieren', 'Erkannten Text (ohne Grounding-Tags) in die Zwischenablage kopieren', (e) => {
+    navigator.clipboard.writeText(text).then(() => { e.target.textContent = 'Kopiert ✔';
+      setTimeout(() => { e.target.textContent = 'Text kopieren'; }, 1500); });
+  });
+  if ($json) btn('JSON', 'Vollständige Antwort des Runners (inkl. raw mit Grounding-Tags) ein-/ausblenden',
+                 () => { $json.style.display = $json.style.display === 'none' ? '' : 'none'; });
+  root.appendChild(bar);
+
+  const body = el('div', 'dsr-body');
+  root.appendChild(body);
+
+  // Bild mit Boxen (Koordinaten in Pixeln des Originalbilds, data.size)
+  const src = dsOcrImageSrc();
+  if (src) {
+    const wrap = el('div', 'dsr-img');
+    const img = el('img'); img.src = src; img.alt = 'Eingabebild';
+    wrap.appendChild(img);
+    body.appendChild(wrap);
+    const draw = () => {
+      const [w, h] = (Array.isArray(data.size) && data.size[0]) ? data.size : [img.naturalWidth, img.naturalHeight];
+      if (!boxes.length || !w) return;
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      const colors = {}; const palette = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6'];
+      for (const b of boxes) {
+        const c = colors[b.label] = colors[b.label] || palette[Object.keys(colors).length % palette.length];
+        const [x1, y1, x2, y2] = b.box;
+        const r = document.createElementNS(NS, 'rect');
+        r.setAttribute('x', x1); r.setAttribute('y', y1);
+        r.setAttribute('width', Math.max(1, x2 - x1)); r.setAttribute('height', Math.max(1, y2 - y1));
+        r.setAttribute('stroke', c);
+        const t = document.createElementNS(NS, 'title'); t.textContent = b.label; r.appendChild(t);
+        svg.appendChild(r);
+      }
+      wrap.appendChild(svg);
+      const legend = el('div', 'dsr-legend');
+      for (const [label, c] of Object.entries(colors)) {
+        const s = el('span', null, label); s.style.setProperty('--c', c); legend.appendChild(s);
+      }
+      wrap.appendChild(legend);
+    };
+    if (img.complete) draw(); else img.onload = draw;
+  }
+
+  const $text = el('div', 'dsr-text');
+  body.appendChild($text);
+
+  function renderText() {
+    $toggle.textContent = showRich ? 'Rohtext' : 'Formatiert';
+    $text.innerHTML = '';
+    if (!showRich) { $text.appendChild(el('pre', null, text || '(kein Text erkannt)')); return; }
+    dsOcrLoadShowdown(() => {
+      if (!window.showdown) { $text.appendChild(el('pre', null, text)); return; }
+      const conv = new showdown.Converter({ tables: true, strikethrough: true });
+      $text.appendChild(dsOcrSanitize(conv.makeHtml(text)));
+    });
+  }
+  renderText();
+}
+
+// Bild aus dem Formularfeld (Base64 oder data-URL)
+function dsOcrImageSrc() {
+  const $in = document.getElementById('image_data');
+  const v = $in && $in.value ? $in.value.trim() : '';
+  if (!v) return null;
+  if (v.startsWith('data:image/')) return v;
+  const mime = v.startsWith('iVBORw0KGgo') ? 'image/png' : v.startsWith('R0lGOD') ? 'image/gif'
+             : v.startsWith('UklGR') ? 'image/webp' : 'image/jpeg';
+  return 'data:' + mime + ';base64,' + v.replace(/\s/g, '');
+}
+
+// showdown erst bei Bedarf laden (wie Page.markdown)
+function dsOcrLoadShowdown(cb) {
+  if (window.showdown) return cb();
+  let s = document.getElementById('ds-showdown');
+  if (!s) {
+    s = document.createElement('script');
+    s.id = 'ds-showdown';
+    s.src = '/static/js/showdown.min.js';
+    document.head.appendChild(s);
+  }
+  s.addEventListener('load', cb, { once: true });
+  s.addEventListener('error', cb, { once: true });
+}
+
+// OCR-Text stammt aus dem Bild: nur einfache Formatierungs-Tags übernehmen, keine Attribute außer colspan/rowspan
+function dsOcrSanitize(html) {
+  const ALLOWED = new Set(['P', 'BR', 'HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'STRONG', 'EM',
+    'B', 'I', 'DEL', 'CODE', 'PRE', 'BLOCKQUOTE', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH', 'SUB', 'SUP']);
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;  // template-Inhalt ist inert: keine Skripte, keine Bilder werden geladen
+  const out = document.createDocumentFragment();
+  const copy = (src, dst) => {
+    for (const n of src.childNodes) {
+      if (n.nodeType === Node.TEXT_NODE) { dst.appendChild(document.createTextNode(n.textContent)); continue; }
+      if (n.nodeType !== Node.ELEMENT_NODE) continue;
+      if (n.tagName === 'SCRIPT' || n.tagName === 'STYLE') continue;
+      if (!ALLOWED.has(n.tagName)) { copy(n, dst); continue; }
+      const e = document.createElement(n.tagName);
+      for (const a of ['colspan', 'rowspan']) {
+        const v = n.getAttribute(a);
+        if (v && /^\d{1,3}$/.test(v)) e.setAttribute(a, v);
+      }
+      copy(n, e);
+      dst.appendChild(e);
+    }
+  };
+  copy(tpl.content, out);
+  return out;
+}
+"""
+
 DEEPSEEK_UI_HTML = """
 <section class="page_section ds">
   <h2>DeepSeek-OCR: Installation</h2>
   <div class="ds-banner" id="ds-banner"></div>
   <div class="ds-grid" id="ds-grid"></div>
   <div class="ds-actions">
-    <button type="button" id="ds-setup">Setup starten</button>
-    <button type="button" id="ds-refresh">Aktualisieren</button>
-    <button type="button" id="ds-stop">Server stoppen</button>
-    <button type="button" id="ds-clean">venv löschen</button>
+    <button type="button" id="ds-setup"
+      title="Installiert vLLM mit uv in ein eigenes venv (eigenes Python 3.12). System-Python und ~/.local bleiben unberührt. Dauert einige Minuten und lädt mehrere GB.">Setup starten</button>
+    <button type="button" id="ds-refresh"
+      title="Status jetzt neu abfragen (läuft sonst automatisch: alle 3 s während Setup/Serverstart, sonst alle 20 s)">Aktualisieren</button>
+    <button type="button" id="ds-stop"
+      title="Beendet den vom Runner gestarteten vLLM-Server und gibt den Grafikspeicher frei. Der nächste OCR-Job startet ihn wieder.">Server stoppen</button>
+    <button type="button" id="ds-clean"
+      title="Beendet den Server und löscht das venv mit vLLM. uv, das Python von uv und das heruntergeladene Modell (Hugging-Face-Cache) bleiben erhalten.">venv löschen</button>
   </div>
   <div class="ds-msg" id="ds-msg"></div>
   <details id="ds-logbox"><summary>Log</summary><pre class="ds-log" id="ds-log"></pre></details>
@@ -384,12 +552,15 @@ DEEPSEEK_UI_JS = """
   const job = (data) => fetch(location.protocol + '//' + location.host + '/', { method: 'POST',
     body: new URLSearchParams({ type: cfg.type, ...data }) }).then((r) => r.json());
   let timer = null;
+  const gb = (b) => (b / 1e9).toFixed(2).replace('.', ',');
 
   function banner(s) {
     if (s.setup_running) return ['ds-run', 'Installation läuft: ' + (s.setup || '').replace(/^running:?\\s*/, '')];
     if (s.setup && s.setup.startsWith('failed')) return ['ds-err', 'Installation fehlgeschlagen: ' + s.setup.slice(8)];
     if (s.up) return ['ds-ok', 'vLLM-Server läuft' + (s.own_server ? ' (vom Runner gestartet)' : ' (extern)')];
-    if (s.own_server) return ['ds-run', 'vLLM-Server startet (beim ersten Mal wird das Modell geladen) ...'];
+    if (s.own_server && s.model_download != null)
+      return ['ds-run', 'vLLM-Server startet, Modell wird heruntergeladen: ' + gb(s.model_download) + ' GB (gesamt ~6,7 GB)'];
+    if (s.own_server) return ['ds-run', 'vLLM-Server startet (Modell laden, CUDA-Graphen erstellen) ...'];
     if (s.vllm_installed) return ['ds-ok', 'vLLM installiert, Server startet beim nächsten Job'];
     if (s.backend === 'server') return ['ds-warn', 'Kein vLLM-Server unter ' + s.url];
     return ['ds-warn', 'vLLM nicht installiert' + (s.auto_setup ? ', der erste Job startet die Installation' : '')];
@@ -411,18 +582,27 @@ DEEPSEEK_UI_JS = """
     const g = $('ds-grid'); g.innerHTML = '';
     row(g, 'Server', yes(s.up, 'erreichbar', 'nicht erreichbar') + '  ' + s.url);
     row(g, 'Backend', s.backend);
-    row(g, 'Modell', s.model + '  (' + (s.model_cached ? 'im HF-Cache' : 'noch nicht geladen, ~7 GB') + ')');
+    row(g, 'Modell', s.model + '  (' + (s.model_download != null ? 'Download läuft: ' + gb(s.model_download) + ' GB'
+      : s.model_cached ? 'im HF-Cache' : 'noch nicht geladen, ~7 GB') + ')');
     row(g, 'vLLM', s.vllm_installed ? '✔ ' + (s.vllm_version || 'installiert') : '✘ nicht installiert');
     row(g, 'venv', code(s.venv + (s.venv_python ? '  (Python ' + s.venv_python + ')' : '')));
     row(g, 'uv', s.uv ? code(s.uv) : '✘ fehlt, wird beim Setup nach ' + s.uv_dir + ' geladen');
+    row(g, 'N-Gram-Sperre', s.ngram_processor ? s.ngram_processor.split(':').pop() : 'keine (vLLM-Version ohne passenden Processor)');
     row(g, 'VRAM-Anteil', Math.round(s.gpu_memory_utilization * 100) + ' %');
     row(g, 'Auto-Setup', s.auto_setup ? 'an' : 'aus');
     $('ds-log').textContent = (s.log || []).join('\\n') || '(leer)';
     const log = $('ds-log'); log.scrollTop = log.scrollHeight;
     if (s.setup_running) $('ds-logbox').open = true;
-    $('ds-setup').disabled = s.setup_running || s.vllm_installed;
-    $('ds-stop').disabled = !s.own_server;
-    $('ds-clean').disabled = s.setup_running || !s.vllm_installed && !s.venv_python;
+    // Tooltip ergänzt um den Grund, warum ein Button gerade gesperrt ist
+    const why = (id, reason) => {
+      const b = $(id);
+      b.dataset.tip = b.dataset.tip || b.title;
+      b.disabled = !!reason;
+      b.title = b.dataset.tip + (reason ? '\\n\\nGesperrt: ' + reason : '');
+    };
+    why('ds-setup', s.setup_running ? 'Installation läuft bereits' : s.vllm_installed ? 'vLLM ist schon installiert' : '');
+    why('ds-stop', s.own_server ? '' : (s.up ? 'Der Server wurde nicht vom Runner gestartet' : 'Kein Server vom Runner gestartet'));
+    why('ds-clean', s.setup_running ? 'Installation läuft noch' : (!s.vllm_installed && !s.venv_python) ? 'Kein venv vorhanden' : '');
   }
 
   function schedule(s) {
@@ -484,7 +664,7 @@ class DeepSeekOcr(r.ImageExecutor):
 
         {"success": true, "text": "...", "boxes": [{"label": "text", "box": [x1, y1, x2, y2]}], "raw": "..."}
     """
-    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR]
+    TAGS = [TAG.IMAGE, TAG.IMAGE_EXTRACTOR, 'hugging']
 
     # Absichtlich OHNE vllm/torch: nwebclient installiert MODULES per `sys.executable -m pip install` ins
     # Runner-Python, vllm würde dort das vorhandene torch ersetzen. vLLM kommt über setup() ins eigene venv.
@@ -492,15 +672,25 @@ class DeepSeekOcr(r.ImageExecutor):
 
     BACKENDS = ['auto', 'venv', 'docker', 'server']
 
-    # Parameter aus dem vLLM-Rezept für DeepSeek-OCR: N-Gram-Sperre gegen Endlos-Wiederholungen,
-    # <td>/</td> bleiben für Tabellen erlaubt
-    LOGITS_PROCESSOR = 'vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor'
-    VLLM_XARGS = {'ngram_size': 30, 'window_size': 90, 'whitelist_token_ids': [128821, 128822]}
+    # N-Gram-Sperre gegen Endlos-Wiederholungen von DeepSeek-OCR. Wo der Logits-Processor liegt, hängt von der
+    # vLLM-Version ab, ngram_processor='auto' nimmt den ersten, der im venv vorhanden ist:
+    #  - bis ~0.1x: NGramPerReqLogitsProcessor aus dem vLLM-Rezept (Fenster 90, <td>/</td> bleiben erlaubt)
+    #  - neuere (z.B. 0.34): allgemeiner NoRepeatNGramLogitsProcessor (ganze Historie, ohne Whitelist)
+    # Gibt es keinen, startet der Server ohne Sperre (max_tokens begrenzt dann Wiederholungen).
+    NGRAM_PROCESSORS = [
+        ('model_executor/models/deepseek_ocr.py', 'class NGramPerReqLogitsProcessor',
+         'vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor',
+         {'ngram_size': 30, 'window_size': 90, 'whitelist_token_ids': [128821, 128822]}),
+        ('model_executor/models/ming_v3_asr_logits_processor.py', 'class NoRepeatNGramLogitsProcessor',
+         'vllm.model_executor.models.ming_v3_asr_logits_processor:NoRepeatNGramLogitsProcessor',
+         {'no_repeat_ngram_size': 30}),
+    ]
 
     def __init__(self, type='deepseek_ocr', model_id='deepseek-ai/DeepSeek-OCR', backend='auto',
                  url='http://127.0.0.1:8017', venv='~/.venvs/vllm', python_version='3.12',
                  gpu_memory_utilization=0.75, max_model_len=8192, max_tokens=4096, startup_timeout=1200,
-                 idle_unload=600, docker_image='vllm/vllm-openai:latest', extra_args='', auto_setup=True):
+                 idle_unload=600, docker_image='vllm/vllm-openai:latest', extra_args='', auto_setup=True,
+                 ngram_processor='auto'):
         """
             :param model_id: Hugging-Face-Modell (deepseek-ai/DeepSeek-OCR)
             :param backend: "auto", "venv", "docker" oder "server"
@@ -515,6 +705,7 @@ class DeepSeekOcr(r.ImageExecutor):
             :param docker_image: Image für backend "docker"
             :param extra_args: zusätzliche Argumente für "vllm serve"
             :param auto_setup: fehlt vLLM, startet der erste Job die Installation mit uv ins venv
+            :param ngram_processor: "auto" (passend zur vLLM-Version im venv), "none" oder "modul:Klasse"
         """
         super().__init__(type)
         if backend not in self.BACKENDS:
@@ -532,6 +723,8 @@ class DeepSeekOcr(r.ImageExecutor):
         self.docker_image = docker_image
         self.extra_args = extra_args
         self.auto_setup = str(auto_setup).lower() not in ('0', 'false', 'no', '')
+        self.ngram_processor = ngram_processor or 'none'
+        self.ngram = None  # (fqcn, vllm_xargs) des laufenden, selbst gestarteten Servers
         self.proc = None            # selbst gestarteter vLLM-Prozess (venv oder docker run)
         self.container_name = None  # bei backend docker
         self.server_log = collections.deque(maxlen=300)
@@ -543,7 +736,7 @@ class DeepSeekOcr(r.ImageExecutor):
         atexit.register(self.unload)
         f = self.define_sig(d.Param('image', is_pos=False), d.PStr('mode', 'free'), d.PStr('prompt', ''))\
             .set_description("Erkennt Text mit DeepSeek-OCR (vLLM), mode: free, markdown, ocr, figure, describe")
-        f.r(success='bool', text='str', boxes='list', raw='str', mode='str', duration='float')
+        f.r(success='bool', text='str', boxes='list', raw='str', mode='str', size='list', duration='float')
         f.r_fail()
 
     # --- Server -------------------------------------------------------------------------------------------------
@@ -572,12 +765,49 @@ class DeepSeekOcr(r.ImageExecutor):
         env['PATH'] = os.path.join(self.venv, 'bin') + os.pathsep + env.get('PATH', '')
         return env
 
+    def vllm_package_dir(self):
+        """ :return: Ordner des vllm-Pakets im venv oder None """
+        import glob
+        for path in glob.glob(os.path.join(self.venv, 'lib', 'python*', 'site-packages', 'vllm')):
+            return path
+        return None
+
+    def find_ngram_processor(self, backend='venv'):
+        """
+            Wählt den N-Gram-Logits-Processor passend zur installierten vLLM-Version. Geprüft wird nur der
+            Quelltext im venv (kein Import, kein Prozess). Bei docker ist der Inhalt des Images unbekannt,
+            dort wird bei "auto" ohne Sperre gestartet.
+
+            :return: (fqcn, vllm_xargs) oder None
+        """
+        mode = self.ngram_processor
+        if mode == 'none':
+            return None
+        if mode != 'auto':
+            for _, _, fqcn, xargs in self.NGRAM_PROCESSORS:
+                if fqcn == mode:
+                    return fqcn, xargs
+            return mode, {}
+        pkg = self.vllm_package_dir() if backend == 'venv' else None
+        if pkg is None:
+            return None
+        for rel, marker, fqcn, xargs in self.NGRAM_PROCESSORS:
+            try:
+                with open(os.path.join(pkg, rel), encoding='utf-8') as f:
+                    if marker in f.read():
+                        return fqcn, xargs
+            except OSError:
+                continue
+        return None
+
     def _serve_args(self, host='127.0.0.1'):
         """ Argumente nach "vllm serve" """
         args = [self.model_id, '--host', host, '--port', str(self.port), '--served-model-name', self.model_id,
-                '--logits_processors', self.LOGITS_PROCESSOR, '--no-enable-prefix-caching',
+                '--no-enable-prefix-caching',
                 '--mm-processor-cache-gb', '0', '--gpu-memory-utilization', str(self.gpu_memory_utilization),
                 '--max-model-len', str(self.max_model_len)]
+        if self.ngram is not None:
+            args += ['--logits_processors', self.ngram[0]]
         if self.extra_args:
             args += shlex.split(self.extra_args)
         return args
@@ -631,6 +861,10 @@ class DeepSeekOcr(r.ImageExecutor):
                 raise RuntimeError(f'vLLM-Server unter {self.url} nicht erreichbar')
             if backend == 'venv':
                 self._require_vllm()
+            self.ngram = self.find_ngram_processor(backend)
+            if self.ngram is None:
+                self.info('Kein N-Gram-Logits-Processor für diese vLLM-Version, starte ohne Wiederholungssperre')
+            if backend == 'venv':
                 cmd = [self.vllm_bin, 'serve'] + self._serve_args()
                 env = self._isolated_env()
                 self.container_name = None
@@ -671,6 +905,7 @@ class DeepSeekOcr(r.ImageExecutor):
                 self.idle_timer.cancel()
                 self.idle_timer = None
             proc, self.proc = self.proc, None
+            self.ngram = None
             if proc is None or proc.poll() is not None:
                 return
             self.info('Beende vLLM-Server')
@@ -864,6 +1099,20 @@ class DeepSeekOcr(r.ImageExecutor):
             os.environ.get('HF_HOME') or os.path.expanduser('~/.cache/huggingface'), 'hub')
         return os.path.join(hub, 'models--' + self.model_id.replace('/', '--'))
 
+    def model_download_bytes(self):
+        """ :return: Bytes der noch unfertigen Modelldateien im HF-Cache (Download läuft), sonst None """
+        import glob
+        files = glob.glob(os.path.join(self.model_cache_dir(), 'blobs', '*.incomplete'))
+        if not files:
+            return None
+        total = 0
+        for path in files:
+            try:
+                total += os.path.getsize(path)
+            except OSError:
+                pass
+        return total
+
     @r.op("Stand von Installation und Server: venv, uv, vLLM-Version, Modell-Cache, Setup-Fortschritt und Log",
           result={'success': 'bool', 'up': 'bool', 'url': 'str', 'vllm_installed': 'bool', 'vllm_version': 'str',
                   'venv': 'str', 'venv_python': 'str', 'uv': 'str', 'model_cached': 'bool', 'own_server': 'bool',
@@ -876,16 +1125,59 @@ class DeepSeekOcr(r.ImageExecutor):
                             vllm_version=self.vllm_version(), venv_python=self.venv_python(),
                             uv=self.find_uv(), uv_dir=self.uv_dir, auto_setup=self.auto_setup,
                             model_cached=os.path.isdir(self.model_cache_dir()),
+                            model_download=self.model_download_bytes(),
                             own_server=own, setup=self.setup_state, setup_running=setup_running,
                             gpu_memory_utilization=self.gpu_memory_utilization,
+                            ngram_processor=(self.ngram or self.find_ngram_processor() or [None])[0],
                             log=list(self.server_log)[-30:])
 
     # --- UI -----------------------------------------------------------------------------------------------------
 
+    def js(self):
+        """ wird von Page(owner=self) eingebunden: nwebclient-Funktionen plus Ergebnisanzeige """
+        return super().js() + DEEPSEEK_RESULT_JS
+
+    # Auswahl im Bildformular, leer = Standard des Runners (free)
+    MODE_OPTIONS = {
+        '': "Standard (free)",
+        'free': "free – nur Text, am schnellsten",
+        'markdown': "markdown – Dokument als Markdown mit Tabellen und Boxen",
+        'ocr': "ocr – Text mit Boxen, ohne Dokumentstruktur",
+        'figure': "figure – Diagramme und Grafiken auslesen",
+        'describe': "describe – Bild beschreiben statt Text lesen",
+    }
+
+    def ui_imageform(self, p):
+        """ wie ImageExecutor.ui_imageform, zusätzlich optional mode und prompt """
+        with p.section():
+            p.js_ready('nx_initFileDragArea("dropZone", "image_data");')
+            p.dropzone('dropZone', "Bild hier ablegen")
+            p.hidden('image_data', '', "image_data")
+            p.form_select('mode', "Modus (optional)", self.MODE_OPTIONS, value='', id='ds_mode',
+                          hint="free: reiner Text · markdown: Dokument mit Überschriften, Tabellen und Boxen · "
+                               "ocr: Text mit Boxen · figure: Diagramme · describe: Bildbeschreibung. "
+                               "Leer = free")
+            p.form_input('prompt', "Eigener Prompt (optional)", id='ds_prompt',
+                         placeholder='z.B. Lies nur die Summe aus.',
+                         hint="Ersetzt den Prompt des Modus. Leer lassen, um den gewählten Modus zu verwenden.")
+            p.form_elem(self.action_btn_parametric("Execute", dict(
+                type=self.type,
+                image='#image_data',
+                mode='#ds_mode',
+                prompt='#ds_prompt'
+            ), on_success=self.imagejobformat_function(), hint="Bild mit DeepSeek-OCR auslesen"))
+        p.div('', id='result_image')
+        p.pre('', id='result')
+
+    def imagejobformat_function(self):
+        """ JS-Callback für das Ergebnis des Bildformulars: Text/Markdown, Bild mit Boxen, Kopieren, JSON """
+        return 'deepseek_ocr_on_result'
+
     def part_index(self, p, params={}):
         """ Status der Installation (venv, uv, vLLM, Modell, Server) mit Log und Aktionen, darunter das Bildformular """
         cfg = {'type': self.type, 'status': self.status()}
-        p('<style>' + DEEPSEEK_UI_CSS + '</style>')
+        # CSS im Inhalt statt über css()/Page.style(): das landet nur im <head>, die UI v2 übernimmt nur den Inhalt
+        p('<style>' + DEEPSEEK_UI_CSS + DEEPSEEK_RESULT_CSS + '</style>')
         p(DEEPSEEK_UI_HTML)
         # Block statt globaler Konstante: die UI v2 führt Skripte bei jedem Öffnen erneut aus
         p('<script>{ const DS_CFG = ' + json.dumps(cfg).replace('</', '<\\/') + ';\n' + DEEPSEEK_UI_JS + '\n}</script>')
@@ -928,7 +1220,8 @@ class DeepSeekOcr(r.ImageExecutor):
                 'temperature': 0.0,
                 'max_tokens': self.max_tokens,
                 'skip_special_tokens': False,
-                'vllm_xargs': self.VLLM_XARGS,
+                # nur an selbst gestartete Server, deren Logits-Processor bekannt ist
+                **({'vllm_xargs': self.ngram[1]} if self.ngram and self.ngram[1] else {}),
             })
             if resp.status_code != 200:
                 raise RuntimeError(f'vLLM {resp.status_code}: {resp.text[:500]}')
@@ -945,7 +1238,7 @@ class DeepSeekOcr(r.ImageExecutor):
             raw = self.read(image, self._prompt(data))
             text, boxes = parse_deepseek_grounding(raw, image.width, image.height)
             return self.success(text=text, boxes=boxes, raw=raw, mode=data.get('mode') or 'free',
-                                duration=round(time.time() - start, 3))
+                                size=[image.width, image.height], duration=round(time.time() - start, 3))
         except Exception as e:
             self.error(str(e))
             return self.fail(str(e))

@@ -1,3 +1,4 @@
+import html
 import json
 import random
 import threading
@@ -12,6 +13,7 @@ from nwebclient import dev as d
 from nwebclient.nlp import ParagraphParser
 
 from nxml.system import AISystemInfo, select_device
+from nxml.hugging import HuggingRunner
 
 
 def text_input_form(runner, p: b.Page, text='', caption="Execute",
@@ -148,12 +150,13 @@ class Seq2SeqGenerator:
     Ersatz für die in transformers 5 entfernten Pipelines text2text-generation und summarization.
     """
 
-    def __init__(self, model, task=None, device_mode='auto'):
+    def __init__(self, model, task=None, device_mode='auto', device=None):
         """
             :param task: z.B. "summarization", übernimmt dann task_specific_params aus der Modell-Config
+            :param device: torch-Device, sonst über device_mode bestimmt
         """
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-        self.device = select_device(device_mode)
+        self.device = device or select_device(device_mode)
         self.tokenizer = AutoTokenizer.from_pretrained(model)
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model).to(self.device).eval()
         params = dict((getattr(self.model.config, 'task_specific_params', None) or {}).get(task, {}))
@@ -168,10 +171,13 @@ class Seq2SeqGenerator:
         return self.tokenizer.decode(out[0], skip_special_tokens=True, clean_up_tokenization_spaces=True).strip()
 
 
-class TextToText(TextExecutor):
+class TextToText(HuggingRunner, TextExecutor):
     """
+    Paraphrasiert oder korrigiert deutschen Text mit einem Seq2Seq-Modell (~3 GB VRAM, T5-large fp32).
+
     ramsrigouthamg/t5-large-paraphraser-diverse-high-quality
     """
+    TAGS = ['hugging']
 
     MODULES = ['beautifulsoup4', 'transformers', 'torch', 'sentencepiece']
 
@@ -179,40 +185,45 @@ class TextToText(TextExecutor):
     DE_PARAPHRASE = "Lelon/t5-german-paraphraser-large"
 
     type = 'ttt'
-    model_name = ''
+    model_name = "Lelon/t5-german-paraphraser-large"
     title = 'Text2Text'
-    def __init__(self, model="Lelon/t5-german-paraphraser-large", device_mode='auto'):
+    HF_MODEL_ATTRS = ('pipe',)
+
+    def __init__(self, model=None, device_mode='auto'):
         """
             :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
         """
         super().__init__()
+        self.hf_init(model, device_mode)
         self.param_names['text'] = "Texteingabe"
-        self.model_name = model
-        self.pipe = Seq2SeqGenerator(model, device_mode=device_mode)
         self.text_result("Paraphrasiert bzw. korrigiert deutschen Text", generated_text='str')
+
+    def load_model(self):
+        self.pipe = Seq2SeqGenerator(self.model_name, device=self.device)
 
     def generate(self, text):
         # liefert {'generated_text': 'Ich kann heute nicht pünktlich sein.'} wie die frühere Pipeline
+        self.load()
         return {'generated_text': self.pipe(text)}
 
     def execute_text(self, text, data):
         return self.generate(text)
 
-    def page(self, params):
-        p = b.Page(owner=self)
+    def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
         p.h2("Text2Text")
         text_input_form(self, p, t='input', input_name='prompt')
         if 'prompt' in params:
             r = self.generate(params['prompt'])
             p.div(r['generated_text'])
-        return p.nxui()
 
 
 
-class QuestionAnswering(r.BaseJobExecutor):
+class QuestionAnswering(HuggingRunner, r.BaseJobExecutor):
     """
-    Beantwortet Fragen zu einem Kontexttext mit einem deutschen extraktiven QA-Modell (GELECTRA).
+    Beantwortet Fragen zu einem Kontexttext mit einem deutschen extraktiven QA-Modell (GELECTRA, ~0,5 GB VRAM fp32).
     """
+    TAGS = ['hugging']
 
     MODULES = ['transformers', 'torch']
 
@@ -223,20 +234,25 @@ class QuestionAnswering(r.BaseJobExecutor):
     doc_stride = 128
     max_answer_len = 15
 
-    def __init__(self, model="deepset/gelectra-base-germanquad", context='', device_mode='auto'):
+    model_name = "deepset/gelectra-base-germanquad"
+    HF_MODEL_ATTRS = ('tokenizer', 'model')
+
+    def __init__(self, model=None, context='', device_mode='auto'):
         """
             :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
         """
         super().__init__()
-        from transformers import AutoModelForQuestionAnswering, AutoTokenizer
-        self.device = select_device(device_mode)
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModelForQuestionAnswering.from_pretrained(model).to(self.device).eval()
+        self.hf_init(model, device_mode)
         self.context = context
         self.define_vars('context')
         self.define_sig(d.Param('question'), d.PStr('context', ''))\
             .set_description("Beantwortet eine Frage anhand eines Kontexts")\
             .r(score='float', start='int', end='int', answer='str')
+
+    def load_model(self):
+        from transformers import AutoModelForQuestionAnswering, AutoTokenizer
+        self.tokenizer = self.hf_pretrained(AutoTokenizer, to_device=False)
+        self.model = self.hf_pretrained(AutoModelForQuestionAnswering)
 
     def answer(self, question, context):
         """
@@ -244,6 +260,7 @@ class QuestionAnswering(r.BaseJobExecutor):
             :return: {'score': float, 'start': int, 'end': int, 'answer': str}
         """
         import torch
+        self.load()
         enc = self.tokenizer(question, context, return_tensors='pt', truncation='only_second',
                              max_length=self.max_length, stride=self.doc_stride,
                              return_overflowing_tokens=True, return_offsets_mapping=True, padding=True)
@@ -274,50 +291,99 @@ class QuestionAnswering(r.BaseJobExecutor):
             return self.answer(data['question'], data.get('context') or self.context)
         return super().execute(data)
 
-    def page_index(self, params={}):
-        p = b.Page(owner=self)
-
-        p.form_input('question', "Question", id='question')
-        p.form_input('context', "Context", id='context')
-        p(self.action_btn_parametric("Frage beantworten", type=self.type, question='#question', context='#context'))
-
-        p.pre('', id='result')
-
-        return p.nxui()
+    def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
+        with p.section(h="Input"):
+            p.form_input('question', "Question", id='question')
+            p.form_input('context', "Context", id='context')
+            p(self.action_btn_parametric("Frage beantworten", type=self.type, question='#question', context='#context'))
+        with p.section(h="Output"):
+            p.pre('', id='result')
 
 
-class TextClassifier(r.BaseJobExecutor):
+
+class TextClassifier(HuggingRunner, r.BaseJobExecutor):
     """
-    https://huggingface.co/facebook/bart-large-mnli - 1.7GB
+    Zero-Shot-Klassifikation von Texten in frei wählbare Klassen (NLI-Modelle, Modell auf der Seite "Modell" wählbar).
 
-    Sahajtomar/German_Zeroshot
+    Standard: https://huggingface.co/MoritzLaurer/bge-m3-zeroshot-v2.0 - multilingual (DE/EN), ~2,2 GB fp32
 
+    multi_label=True: unabhängiger Score 0..1 pro Klasse (mehrere oder keine Klasse möglich)
+    multi_label=False: Scores summieren sich zu 1 (genau eine Klasse)
+    Die Scores sind nicht kalibriert, Schwellwerte an eigenen Beispielen festlegen.
+
+    t.classify("Die Lieferung kam beschädigt an.", ['Beschwerde', 'Lob', 'Frage'], multi_label=False)
+    t.execute({'op': 'configure', 'model': 'MoritzLaurer/mDeBERTa-v3-base-mnli-xnli', 'load': '1'})
     t.run_group({'group':'ds_sus', 'classes': ['Führungsanfrage', 'Mail', 'Absage', 'Presseanfrage', 'Sonstiges']})
     """
 
     MODULES = ['transformers']
-    TAGS = [r.TAG.TEXT_EXTRACTOR]
+    TAGS = [r.TAG.TEXT_EXTRACTOR, 'hugging']
 
-    def __init__(self, type='classify', classes=None, model="facebook/bart-large-mnli"):
+    model_name = "MoritzLaurer/bge-m3-zeroshot-v2.0"
+    HF_MODEL_ATTRS = ('classifier',)
+
+    # Repo-ID -> (Sprachen, Größe, Info)
+    MODELS = {
+        'MoritzLaurer/bge-m3-zeroshot-v2.0': ("DE, EN, multilingual", "~2,2 GB",
+                                              "Empfohlen, bis 8192 Tokens, aktuelle Trainingsdaten"),
+        'MoritzLaurer/mDeBERTa-v3-base-mnli-xnli': ("DE, EN, multilingual", "~1,1 GB",
+                                                    "Kleiner und schneller, etwas ungenauer"),
+        'MoritzLaurer/deberta-v3-large-zeroshot-v2.0': ("nur EN", "~1,7 GB", "Beste Wahl für rein englische Texte"),
+        'MoritzLaurer/deberta-v3-base-zeroshot-v2.0': ("nur EN", "~0,7 GB", "Klein, englisch"),
+        'svalabs/gbert-large-zeroshot-nli': ("nur DE", "~1,3 GB", "Deutsches BERT"),
+        'Sahajtomar/German_Zeroshot': ("nur DE", "~1,3 GB", "Deutsches BERT (älter)"),
+        'facebook/bart-large-mnli': ("nur EN", "~1,6 GB", "Klassiker (2019), für Deutsch ungeeignet"),
+    }
+
+    TEMPLATES = ["This example is {}.", "This text is about {}.", "Dieser Text ist {}.",
+                 "Das Thema dieses Textes ist {}."]
+
+    def __init__(self, type='classify', classes=None, model=None, device_mode='auto', multi_label=True,
+                 hypothesis_template=None):
+        """
+            :param multi_label: Standard für Anfragen ohne multi_label
+            :param hypothesis_template: z.B. "Dieser Text ist {}.", None = Standard der Pipeline ("This example is {}.")
+        """
         super().__init__()
         self.type = type
         self.classes = classes
-        from transformers import pipeline
-        self.classifier = pipeline("zero-shot-classification", model=model)
+        self.multi_label = self.read_bool(multi_label)
+        self.hypothesis_template = hypothesis_template or None
+        self.hf_init(model, device_mode)
+        self.define_vars('multi_label', 'hypothesis_template')
         self.define_sig(d.Param('classify'), d.Param('classes'))\
-            .set_description("Zero-Shot-Klassifikation eines Textes (classes mit Komma getrennt)")\
-            .r(sequence='str', labels='list', scores='list')
+            .set_description("Zero-Shot-Klassifikation eines Textes (classes mit Komma getrennt, optional "
+                             "multi_label und hypothesis_template)")\
+            .r(sequence='str', labels='list', scores='list', probabilities='dict')
         self.define_sig(d.Param('group'), d.Param('classes'))\
             .set_description("Klassifiziert alle Dokumente einer nweb-Gruppe, Ausgabe nur im Log")
 
-    def classify(self, text, classes):
+    @staticmethod
+    def read_bool(value, default=True):
+        if value is None or value == '':
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'ja', 'on')
+        return bool(value)
+
+    def classify(self, text, classes, multi_label=None, hypothesis_template=None):
         """
-             Return: {labels: [], scores:[]}
-            :param text:
-            :param classes:
-            :return:
+            :param multi_label: None = self.multi_label
+            :param hypothesis_template: None = self.hypothesis_template
+            :return: {sequence, labels: [], scores: [], probabilities: {Klasse: Score}} absteigend nach Score
         """
-        return self.classifier(text, classes, multi_label=True)
+        self.load()
+        kwargs = dict(multi_label=self.multi_label if multi_label is None else multi_label)
+        template = hypothesis_template or self.hypothesis_template
+        if template:
+            kwargs['hypothesis_template'] = template
+        res = dict(self.classifier(text, classes, **kwargs))
+        res['probabilities'] = {label: float(score) for label, score in zip(res['labels'], res['scores'])}
+        return res
+
+    def load_model(self):
+        self.classifier = self.hf_pipeline("zero-shot-classification")
 
     def run_group(self, **data):
         nc = NWebClient(data.get('nweb', None))
@@ -330,35 +396,160 @@ class TextClassifier(r.BaseJobExecutor):
         return {}
 
     def read_classes(self, data, key='classes'):
-        res = data.get('classes', None)
-        if res is None:
+        res = data.get(key, None)
+        if res is None or res == '':
             return self.classes
         if isinstance(res, str):
             res = res.split(',')
-        return res
+        return [c.strip() for c in res if str(c).strip() != '']
+
+    @r.op("Wählt das Modell (Repo-ID auf Hugging Face), das aktuelle wird entladen", name='configure',
+          success={'loaded': 'bool', 'model': 'str'}, fail={})
+    def op_configure(self, model: str = '', load: str = ''):
+        model = model.strip()
+        if not model:
+            return self.fail("model fehlt")
+        self.set_model_name(model)
+        if self.read_bool(load, False):
+            try:
+                self.load()
+            except Exception as e:
+                return self.fail(f"{model} konnte nicht geladen werden: {e}")
+        return self.success(f"Modell: {model}", ui_reload=True, **self.hf_status())
 
     def execute(self, data):
         if 'classify' in data:
-            return self.classify(data['classify'], self.read_classes(data))
+            classes = self.read_classes(data)
+            if not classes:
+                return self.fail("Keine Klassen angegeben")
+            multi_label = data.get('multi_label')
+            return self.classify(data['classify'], classes,
+                                 multi_label=None if multi_label in (None, '') else self.read_bool(multi_label),
+                                 hypothesis_template=data.get('hypothesis_template') or None)
         if 'group' in data:
             return self.run_group(**data)
         return super().execute(data)
 
-    def page_index(self, params={}):
-        p = b.Page(owner=self)
-        p.h1("Classify")
-        p.p("Klassen mit Komman(,) trennen")
-        p.form_input('classify', "Text", id='classify')
-        p.form_input('classes', "Klassen", id='classes')
-        p(self.action_btn_parametric("Klassifizieren", type=self.type, classify='#classify', classes='#classes'))
-
-        p.pre('', id='result')
-
-        return p.nxui()
-
-
-class Jeff(AISystemInfo, r.BaseJobExecutor):
+    RENDER_JS = """
+        function textclassifier_esc(s) {
+            return String(s).replace(/[&<>"']/g, function(c) {
+                return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+            });
+        }
+        function textclassifier_render(data) {
+            var view = document.getElementById('textclassifier_view');
+            document.getElementById('result').innerText = JSON.stringify(data, null, 2);
+            if (!data || !data.labels) {
+                view.innerHTML = '<div style="color:#c0392b">' + textclassifier_esc((data && data.message) || 'Fehler') + '</div>';
+                return;
+            }
+            var multi = document.getElementById('multi_label').checked;
+            var th = parseFloat(document.getElementById('threshold').value) || 0;
+            var best = data.labels[0], bestScore = data.scores[0];
+            var head;
+            if (multi && th > 0 && bestScore < th) {
+                head = 'Keine Klasse über ' + (th * 100).toFixed(0) + '% (beste: ' + textclassifier_esc(best) + ')';
+            } else {
+                head = textclassifier_esc(best) + ' <span style="font-weight:normal;opacity:.7">' +
+                       (bestScore * 100).toFixed(1) + '%</span>';
+            }
+            var h = '<div style="border:1px solid #8884;border-radius:8px;padding:12px;max-width:640px">';
+            h += '<div style="font-size:1.4em;font-weight:bold;margin-bottom:10px">' + head + '</div>';
+            for (var i = 0; i < data.labels.length; i++) {
+                var s = data.scores[i], pct = (s * 100).toFixed(1);
+                var hit = multi ? (th > 0 && s >= th) : i === 0;
+                h += '<div style="display:flex;gap:8px;align-items:center;margin:4px 0">' +
+                     '<span style="width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' +
+                     (hit ? ';font-weight:bold' : '') + '">' + textclassifier_esc(data.labels[i]) + '</span>' +
+                     '<span style="flex:1;background:#8882;border-radius:4px;height:14px;position:relative">' +
+                     '<span style="position:absolute;left:0;top:0;bottom:0;width:' + pct + '%;border-radius:4px;' +
+                     'background:' + (hit ? '#2e86de' : '#9bb7d4') + '"></span>' +
+                     (multi && th > 0 ? '<span style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#c0392b;left:' +
+                      (th * 100) + '%"></span>' : '') + '</span>' +
+                     '<span style="width:60px;text-align:right;font-variant-numeric:tabular-nums">' + pct + '%</span></div>';
+            }
+            h += '<div style="margin-top:8px;font-size:.85em;opacity:.7">' +
+                 (multi ? 'multi_label: unabhängiger Score pro Klasse' : 'single_label: Scores summieren sich zu 100%') +
+                 ', nicht kalibriert</div></div>';
+            view.innerHTML = h;
+        }
+        function textclassifier_run(type) {
+            exec_job_p({'type': type, 'classify': '#classify', 'classes': '#classes',
+                        'multi_label': document.getElementById('multi_label').checked ? '1' : '0',
+                        'hypothesis_template': '#hypothesis_template'}, textclassifier_render);
+        }
     """
+
+    EXAMPLES = [
+        dict(title="Beschwerde", text="Die Lieferung kam beschädigt an und niemand antwortet auf meine Mails.",
+             classes="Beschwerde, Lob, Frage"),
+        dict(title="Englisch", text="Could you tell me when the new version will be released?",
+             classes="Beschwerde, Lob, Frage"),
+        dict(title="Mehrere", text="Super Service, aber wann kommt eigentlich die Rechnung?",
+             classes="Beschwerde, Lob, Frage, Rechnung"),
+    ]
+
+    def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
+        p.h1("Zero-Shot-Klassifikation")
+        p.script(self.RENDER_JS)
+        p.script('var textclassifier_examples = ' + json.dumps(self.EXAMPLES) + ';'
+                 'function textclassifier_example(i) {'
+                 '  document.getElementById("classify").value = textclassifier_examples[i].text;'
+                 '  document.getElementById("classes").value = textclassifier_examples[i].classes;'
+                 '}')
+        p.div("Beispiele: " + ' '.join(w.button_js(e['title'], f'textclassifier_example({i})')
+                                         for i, e in enumerate(self.EXAMPLES)))
+        p.div("Text")
+        p('<textarea id="classify" name="classify" style="width:90%; height:120px"></textarea>')
+        p.form_input('classes', "Klassen (mit Komma getrennt)", id='classes',
+                     value=', '.join(self.classes) if self.classes else '')
+        p.form_input('hypothesis_template', "Hypothese ({} = Klasse, leer = Standard des Modells)",
+                     id='hypothesis_template', value=self.hypothesis_template or '', suggestions=self.TEMPLATES)
+        checked = ' checked' if self.multi_label else ''
+        p(f'<div><label><input type="checkbox" id="multi_label"{checked} /> multi_label '
+          f'(unabhängige Scores, mehrere oder keine Klasse möglich)</label></div>')
+        p('<div><label>Schwellwert (nur multi_label) <input type="number" id="threshold" value="0.5" '
+          'min="0" max="1" step="0.05" style="width:80px" /></label></div>')
+        p(w.button_js("Klassifizieren", f'textclassifier_run({json.dumps(self.type)})'))
+        p.div('', id='textclassifier_view', style='margin-top:12px')
+        p('<details><summary>JSON</summary>')
+        p.pre('', id='result')
+        p('</details>')
+
+    def part_hf_model_config(self, p: b.Page, params={}):
+        """ Modellwahl auf der Modell-Seite (part_hf_model) """
+        from nxml.hugging import hf_model_cache_dir
+        import os
+        with p.section(h="Modell wählen"):
+            p.div("Alle Modelle sind NLI-Zero-Shot-Modelle für dieselbe Pipeline. Beim Wechsel wird das aktuelle "
+                  "Modell entladen, das neue lädt beim ersten Aufruf (oder mit \"Wählen + Laden\").")
+            p('<table>')
+            p('<tr><th>Modell</th><th>Sprachen</th><th>Größe</th><th>Info</th><th>Im Cache</th><th></th></tr>')
+            models = dict(self.MODELS)
+            if self.model_name and self.model_name not in models:
+                models[self.model_name] = ("?", "?", "eigenes Modell")
+            for model, (langs, size, info) in models.items():
+                active = model == self.model_name
+                name = w.a(html.escape(model), 'https://huggingface.co/' + model)
+                cached = "ja" if os.path.isdir(hf_model_cache_dir(model)) else "nein"
+                btns = '<i>aktiv</i>' if active else \
+                    self.action_btn(dict(title="Wählen", type=self.type, op='configure', model=model)) + \
+                    self.action_btn(dict(title="Wählen + Laden", type=self.type, op='configure', model=model, load='1'))
+                row_style = ' style="font-weight:bold"' if active else ''
+                p(f"<tr{row_style}><td>{name}</td><td>{langs}</td>"
+                  f"<td>{size}</td><td>{info}</td><td>{cached}</td><td>{btns}</td></tr>")
+            p('</table>')
+        with p.section(h="Eigenes Modell"):
+            p.form_input('model', "Repo-ID (zero-shot-classification bzw. NLI)", value=self.model_name or '',
+                         id='model', suggestions=list(self.MODELS.keys()))
+            p(self.action_btn_parametric("Übernehmen", dict(type=self.type, op='configure', model='#model')))
+
+
+class Jeff(HuggingRunner, r.BaseJobExecutor):
+    """
+    Fact-Check- und Text-Klassifikator Jeff-1 (~8 GB VRAM bf16, ~4,5 GB 8-bit, ~3 GB 4-bit).
+
     https://huggingface.co/GestaltLabs/Jeff-1 - LoRA auf Qwen/Qwen3-4B-Instruct-2507 (~8GB bf16)
     https://github.com/Gestalt-Lab/jeff
 
@@ -378,7 +569,7 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
     Das Modell wird lazy beim ersten Aufruf geladen.
     """
     MODULES = ['torch', 'transformers', 'peft', 'accelerate', 'bitsandbytes', 'psutil']
-    TAGS = [r.TAG.TEXT_EXTRACTOR]
+    TAGS = [r.TAG.TEXT_EXTRACTOR, 'hugging']
 
     SYSTEM = (
         "You are a fact-checking classifier. You are given a claim and the evidence "
@@ -428,65 +619,57 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
         self.base_model = base_model
         self.adapter = adapter
         self.quantization = quantization
-        self.device = device
-        self.model = None
-        self.tokenizer = None
-        self.lock = threading.Lock()
+        # festes Gerät, None = automatisch (CUDA, MPS, CPU)
+        self.fixed_device = device
+        self.hf_init()
+
+    HF_MODEL_ATTRS = ('model', 'tokenizer')
+    HF_PAGES = [('index', "Fact-Check"), ('questions', "Fragen (JSON)")]
+
+    @property
+    def model_name(self):
+        return self.base_model
+
+    @model_name.setter
+    def model_name(self, value):
+        self.base_model = value
 
     @property
     def loaded(self):
-        return self.model is not None
+        return self.hf_loaded
 
-    def select_device(self):
+    def hf_select_device(self):
+        return self.fixed_device or select_device('auto')
+
+    def hf_models(self):
+        return [m for m in (self.base_model, self.adapter) if m]
+
+    def hf_model_label(self):
+        return self.model_id()
+
+    def load_model(self):
         import torch
-        if self.device is not None:
-            return self.device
-        if torch.cuda.is_available():
-            return 'cuda'
-        if torch.backends.mps.is_available():
-            return 'mps'
-        return 'cpu'
-
-    def load(self):
-        with self.lock:
-            if self.model is not None:
-                return
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            self.device = self.select_device()
-            dtype = torch.float32 if self.device == 'cpu' else torch.bfloat16
-            self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
-            if self.quantization in ('4bit', '8bit'):
-                from transformers import BitsAndBytesConfig
-                if self.quantization == '4bit':
-                    qcfg = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4',
-                                              bnb_4bit_compute_dtype=torch.bfloat16)
-                else:
-                    qcfg = BitsAndBytesConfig(load_in_8bit=True)
-                model = AutoModelForCausalLM.from_pretrained(self.base_model, quantization_config=qcfg,
-                                                             dtype=torch.bfloat16, device_map='auto')
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        dtype = torch.float32 if self.device == 'cpu' else torch.bfloat16
+        self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
+        if self.quantization in ('4bit', '8bit'):
+            from transformers import BitsAndBytesConfig
+            if self.quantization == '4bit':
+                qcfg = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4',
+                                          bnb_4bit_compute_dtype=torch.bfloat16)
             else:
-                # erst auf CPU laden, sonst ggf. "Cannot copy out of meta tensor" bei knappem Speicher
-                model = AutoModelForCausalLM.from_pretrained(self.base_model, dtype=dtype, device_map='cpu')
-            if self.adapter:
-                from peft import PeftModel
-                model = PeftModel.from_pretrained(model, self.adapter)
-            if self.quantization not in ('4bit', '8bit'):
-                model = model.to(self.device)
-            self.model = model.eval()
-            self.info(f"Loaded {self.model_id()} on {self.device}")
-
-    def unload(self):
-        with self.lock:
-            if self.model is None:
-                return
-            self.model = None
-            self.tokenizer = None
-            import gc
-            import torch
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                qcfg = BitsAndBytesConfig(load_in_8bit=True)
+            model = AutoModelForCausalLM.from_pretrained(self.base_model, quantization_config=qcfg,
+                                                         dtype=torch.bfloat16, device_map='auto')
+        else:
+            # erst auf CPU laden, sonst ggf. "Cannot copy out of meta tensor" bei knappem Speicher
+            model = AutoModelForCausalLM.from_pretrained(self.base_model, dtype=dtype, device_map='cpu')
+        if self.adapter:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, self.adapter)
+        if self.quantization not in ('4bit', '8bit'):
+            model = model.to(self.device)
+        self.model = model.eval()
 
     def configure(self, base_model=None, adapter=None, quantization=None, preset=None):
         """ Wechselt das Modell, ein geladenes Modell wird entladen. Neues Modell wird lazy geladen. """
@@ -506,9 +689,12 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
             res += ' (' + self.quantization + ')'
         return res
 
+    def hf_status(self):
+        return dict(super().hf_status(), base_model=self.base_model, adapter=self.adapter,
+                    quantization=self.quantization)
+
     def status(self):
-        return self.success(loaded=self.loaded, model=self.model_id(), base_model=self.base_model,
-                            adapter=self.adapter, quantization=self.quantization, device=self.device)
+        return self.success(**self.hf_status())
 
     @staticmethod
     def label_space(q):
@@ -631,14 +817,6 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
 
     def execute(self, data):
         op = data.get('op')
-        if op == 'load':
-            self.load()
-            return self.status()
-        if op == 'unload':
-            self.unload()
-            return self.status()
-        if op == 'status':
-            return self.status()
         if op == 'configure':
             self.configure(base_model=data.get('base_model'), adapter=data.get('adapter'),
                            quantization=data.get('quantization'), preset=data.get('preset'))
@@ -707,20 +885,8 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
         }
     """
 
-    def part_nav(self, p: b.Page):
-        p.ul([w.a("Fact-Check", self.link(self.part_index)),
-              w.a("Fragen (JSON)", self.link(self.part_questions)),
-              w.a("Modell", self.link(self.part_models)),
-              w.a("Systeminfo", self.link(self.part_systeminfo))])
-        p.div(f"Modell: {self.model_id()} - {'geladen auf ' + str(self.device) if self.loaded else 'nicht geladen (lädt beim ersten Aufruf)'}")
-
-    def part_models(self, p: b.Page, params={}):
-        p.h1("Jeff-1 Modell")
-        self.part_nav(p)
-        with p.section(h="Laden / Entladen"):
-            p(self.action_btn(dict(title="Laden", type=self.type, op='load')))
-            p(self.action_btn(dict(title="Entladen", type=self.type, op='unload')))
-            p(self.action_btn(dict(title="Status", type=self.type, op='status')))
+    def part_hf_model_config(self, p: b.Page, params={}):
+        """ Modellwahl auf der Modell-Seite (part_hf_model) """
         with p.section(h="Vorschläge"):
             p.div("Der Jeff-1-Adapter passt nur auf Qwen3-4B-Instruct-2507. Für weniger Speicher: 8-/4-bit Quantisierung "
                   "(benötigt CUDA und bitsandbytes). Modelle ohne Adapter sind nur Zero-Shot und nicht kalibriert.")
@@ -746,7 +912,6 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
                          id='quantization', suggestions=['8bit', '4bit'])
             p(self.action_btn_parametric("Übernehmen", dict(type=self.type, op='configure', base_model='#base_model',
                                                            adapter='#adapter', quantization='#quantization')))
-        p.pre('', id='result')
 
     def part_result(self, p: b.Page):
         p.script(self.RENDER_JS)
@@ -754,9 +919,9 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
         p.pre('', id='result')
 
     def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
         p.h1("Jeff-1 Fact-Check")
         p.div(w.a("GestaltLabs/Jeff-1 auf Hugging Face", "https://huggingface.co/GestaltLabs/Jeff-1"))
-        self.part_nav(p)
         p.script('var jeff_examples = ' + json.dumps(self.FACTCHECK_EXAMPLES) + ';'
                  'function jeff_example(i) {'
                  '  document.getElementById("claim").value = jeff_examples[i].claim;'
@@ -771,8 +936,8 @@ class Jeff(AISystemInfo, r.BaseJobExecutor):
         self.part_result(p)
 
     def part_questions(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'questions')
         p.h1("Jeff-1 Fragen")
-        self.part_nav(p)
         p.div("State (Text oder JSON)")
         p('<textarea id="state" name="state" style="width:90%; height:150px">' +
           json.dumps({'claim': "The museum opened in 1998.",
@@ -842,25 +1007,36 @@ class TextWorker(TextExecutor):
         return str(p)
 
 
-class TextSummarization(TextExecutor):
+class TextSummarization(HuggingRunner, TextExecutor):
     """
+    Fasst englische Texte zusammen (~1,2 GB VRAM, distilbart-cnn-12-6 fp32).
+
     https://huggingface.co/sshleifer/distilbart-cnn-12-6
     """
 
     MODULES = ['beautifulsoup4', 'transformers', 'torch']
-    TAGS = [r.TAG.TEXT_TRANSFORM]
+    TAGS = [r.TAG.TEXT_TRANSFORM, 'hugging']
 
     type = "summarize"
+    model_name = "sshleifer/distilbart-cnn-12-6"
+    HF_MODEL_ATTRS = ('pipe',)
 
-    def __init__(self, model="sshleifer/distilbart-cnn-12-6", device_mode='auto'):
+    def __init__(self, model=None, device_mode='auto'):
         """
             :param device_mode: "cpu", "gpu" (CUDA, sonst MPS) oder "auto" (GPU falls vorhanden, sonst CPU)
         """
         super().__init__()
+        self.hf_init(model, device_mode)
         self.param_names['text'] = "Text der zusammengefasst werden soll"
-        self.model = model
-        self.pipe = Seq2SeqGenerator(self.model, task='summarization', device_mode=device_mode)
         self.text_result("Fasst einen Text zusammen", summary_text='str', value='str')
+
+    @property
+    def model(self):
+        """ früherer Name von model_name """
+        return self.model_name
+
+    def load_model(self):
+        self.pipe = Seq2SeqGenerator(self.model_name, task='summarization', device=self.device)
 
     def summerize(self, text) -> dict:
         """
@@ -868,23 +1044,21 @@ class TextSummarization(TextExecutor):
         :param text:
         :return: object
         """
+        self.load()
         summary = self.pipe(text)
         return {'summary_text': summary, 'value': summary}
 
     def execute_text(self, text, data={}):
         return self.summerize(text)
 
-    def page(self, params={}):
-        p = b.Page(owner=self)
+    def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
         p('<div class="TextSummarization runner_page">')
-        p.h1("TextSummarization")
-        p.div("Model: " + self.model)
         text_input_form(self, p, text=params.get('text', ''), caption="Summarize")
         if 'text' in params:
             res = self.summerize(params['text'])
             p.div(self.format_html(res))
         p('</div>')
-        return p.nxui()
 
     def format_html(self, data):
         return '<div class="result">'+data['summary_text']+'</div>'
