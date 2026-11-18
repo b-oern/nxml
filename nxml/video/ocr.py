@@ -410,48 +410,71 @@ class VideoOcr(r.BaseJobExecutor):
 
     # -- Web --
 
+    # Die Endpunkte laufen über den Dispatcher (/pysys/dispatcher?type=video_ocr&video_ocr=<name> -> page_<name>),
+    # weil ein nachgeladener Runner nach dem ersten Request keine eigenen Flask-Routen mehr anlegen kann. Wenn der
+    # Runner beim Start geladen wird, gibt es sie zusätzlich unter /nxml/video_ocr/<name>.
+
+    HTTP_ENDPOINTS = {'upload': ['POST'], 'frame': ['GET'], 'crop': ['GET'], 'export': ['GET']}
+
     def route(self, name):
+        return f'/pysys/dispatcher?type={self.type}&{self.type}={name}'
+
+    def rest_route(self, name):
         return f'/nxml/{self.type}/{name}'
 
+    def page_upload(self, params={}):
+        return self.http_upload()
+
+    def page_frame(self, params={}):
+        return self.http_frame()
+
+    def page_crop(self, params={}):
+        return self.http_crop()
+
+    def page_export(self, params={}):
+        return self.http_export()
+
     def setupRestApp(self, app):
+        for name, methods in self.HTTP_ENDPOINTS.items():
+            app.add_url_rule(self.rest_route(name), f'{self.type}_{name}', view_func=getattr(self, 'http_' + name),
+                             methods=methods)
+
+    def http_upload(self):
+        from flask import request
+        f = request.files.get('file')
+        if f is None:
+            return self.fail('No file')
+        return self.store_upload(f.filename, f.save)
+
+    def http_frame(self):
         from flask import request, Response
+        try:
+            image = self.frame(request.args['video_id'], request.args.get('t', 0))
+            return Response(self.jpeg(image), mimetype='image/jpeg')
+        except Exception as e:
+            return Response(str(e), status=404)
 
-        def upload():
-            f = request.files.get('file')
-            if f is None:
-                return self.fail('No file')
-            return self.store_upload(f.filename, f.save)
+    def http_crop(self):
+        from flask import request, Response
+        try:
+            job = self.get_job(request.args['job_id'])
+            path = os.path.join(self.video_dir(job['video_id']), job['job_id'], f"{int(request.args['i'])}.jpg")
+            with open(path, 'rb') as f:
+                return Response(f.read(), mimetype='image/jpeg')
+        except (ValueError, KeyError, OSError) as e:
+            return Response(str(e), status=404)
 
-        def frame():
-            try:
-                image = self.frame(request.args['video_id'], request.args.get('t', 0))
-                return Response(self.jpeg(image), mimetype='image/jpeg')
-            except Exception as e:
-                return Response(str(e), status=404)
-
-        def crop():
-            try:
-                job = self.get_job(request.args['job_id'])
-                path = os.path.join(self.video_dir(job['video_id']), job['job_id'], f"{int(request.args['i'])}.jpg")
-                with open(path, 'rb') as f:
-                    return Response(f.read(), mimetype='image/jpeg')
-            except (ValueError, KeyError, OSError) as e:
-                return Response(str(e), status=404)
-
-        def export():
-            try:
-                job = self.get_job(request.args['job_id'])
-            except ValueError as e:
-                return Response(str(e), status=404)
-            fmt = 'json' if request.args.get('format') == 'json' else 'csv'
-            content = self.export(job, fmt, ';' if request.args.get('sep') == ';' else ',')
-            name = f"video_ocr_{job['job_id']}.{fmt}"
-            return Response(content, mimetype='application/json' if fmt == 'json' else 'text/csv',
-                            headers={'Content-Disposition': f'attachment; filename="{name}"'})
-
-        for name, func, methods in [('upload', upload, ['POST']), ('frame', frame, ['GET']),
-                                    ('crop', crop, ['GET']), ('export', export, ['GET'])]:
-            app.add_url_rule(self.route(name), f'{self.type}_{name}', view_func=func, methods=methods)
+    def http_export(self):
+        from flask import request, Response
+        try:
+            job = self.get_job(request.args['job_id'])
+        except ValueError as e:
+            return Response(str(e), status=404)
+        fmt = 'json' if request.args.get('format') == 'json' else 'csv'
+        content = self.export(job, fmt, ';' if request.args.get('sep') == ';' else ',')
+        name = f"video_ocr_{job['job_id']}.{fmt}"
+        return Response(content, mimetype='application/json' if fmt == 'json' else 'text/csv',
+                        headers={'Content-Disposition': f'attachment; filename="{name}"'})
 
     def part_index(self, p: b.Page, params={}):
         cfg = {
@@ -461,7 +484,9 @@ class VideoOcr(r.BaseJobExecutor):
         }
         p(f'<style>{VIDEO_OCR_CSS}</style>')
         p(VIDEO_OCR_HTML)
-        p(f'<script>const VIDEO_OCR = {json.dumps(cfg).replace('</', '<\\/')};\n{VIDEO_OCR_JS}</script>')
+        # Block statt globaler Konstante: die UI v2 führt die Skripte bei jedem Öffnen erneut aus
+        cfg_json = json.dumps(cfg).replace('</', '<\\/')
+        p('<script>{ const VIDEO_OCR = ' + cfg_json + ';\n' + VIDEO_OCR_JS + '\n}</script>')
 
 
 VIDEO_OCR_CSS = """
@@ -578,10 +603,13 @@ VIDEO_OCR_JS = r"""
 (function() {
   const cfg = VIDEO_OCR;
   const $ = (id) => document.getElementById(id);
+  // UI v2 ersetzt den Inhalt beim Wechsel: dann Abfragen dieser Instanz beenden
+  const rootEl = $('vo-file').closest('.vo');
+  const alive = () => rootEl.isConnected;
   const state = { video: null, box: null, job: null, rows: [] };
   const url = (path, params) => {
     const base = location.protocol + '//' + location.host;
-    return base + path + (params ? '?' + new URLSearchParams(params) : '');
+    return base + path + (params ? (path.indexOf('?') >= 0 ? '&' : '?') + new URLSearchParams(params) : '');
   };
 
   function job(data) {
@@ -659,7 +687,8 @@ VIDEO_OCR_JS = r"""
     }
     drawBox();
   });
-  window.addEventListener('resize', drawBox);
+  const onResize = () => { if (alive()) drawBox(); else window.removeEventListener('resize', onResize); };
+  window.addEventListener('resize', onResize);
   function scale() { return img.clientWidth / (img.naturalWidth || 1); }
   function clampBox() {
     const b = state.box, W = img.naturalWidth, H = img.naturalHeight;
@@ -764,6 +793,7 @@ VIDEO_OCR_JS = r"""
     });
   }
   function poll() {
+    if (!alive()) return;
     job({ op: 'status', job_id: state.job, offset: state.rows.length }).then((r) => {
       if (!r.success) { msg(3, r.message, true); return; }
       addRows(r.rows);
