@@ -105,6 +105,16 @@ class ComfyUi(r.BaseJobExecutor):
         self.define_sig(d.PStr('op', 'template'), d.Param('path'))\
             .set_description("Fuellt ein Workflow-Template (value_<Name>=Wert) und legt es als Jobdatei ab")\
             .r_success(job_guid='str')
+        self.define_sig(d.PStr('op', 'workflows'), d.PInt('full', 0))\
+            .set_description("Pfade der angebotenen Workflows, mit full=1 auch deren Inhalt (workflows, errors)")\
+            .r_success(value='list', workflows='dict', errors='dict')
+        f = self.define_sig(d.PStr('op', 'workflow_get'), d.Param('workflow'))\
+            .set_description("Inhalt eines Workflows (JSON)")
+        f.r_success(workflow='dict')
+        f.r_fail()
+        self.define_sig(d.PStr('op', 'server_info'))\
+            .set_description("Server-URL und Pfade der Konfiguration (comfyui_path, jobpath, workflow_dir, workflows)")\
+            .r_success(server_url='str', cfg='dict')
 
     def merge(self, a: dict, b: dict, path=[]):
         try:
@@ -511,6 +521,31 @@ class ComfyUi(r.BaseJobExecutor):
         self.save_workflow(path, workflow)
         return self.success(f"Gespeichert: {path}", workflow=path)
 
+    def execute_workflows(self, data={}):
+        paths = self.workflows()
+        res = self.success(value=paths)
+        if str(data.get('full', 0)) in ('1', 'true', 'True'):
+            workflows, errors = {}, {}
+            for path in paths:
+                try:
+                    workflows[path] = self.load_workflow(path)
+                except (OSError, ValueError) as e:
+                    errors[path] = str(e)
+            res.update(workflows=workflows, errors=errors)
+        return res
+
+    def execute_workflow_get(self, data):
+        try:
+            return self.success(workflow=self.load_workflow(data['workflow']))
+        except (KeyError, OSError, ValueError) as e:
+            return self.fail(str(e))
+
+    SERVER_INFO_KEYS = ('comfyui_path', 'jobpath', 'workflow_dir', 'workflows')
+
+    def execute_server_info(self, data={}):
+        return self.success(server_url=self.server_url,
+                            cfg={k: self.cfg[k] for k in self.SERVER_INFO_KEYS if k in self.cfg})
+
     def execute(self, data):
         if 'prompt' in data and 'image' in data and 'op' not in data:
             return self.send_prompt_and_image_to_comfyui(data['prompt'], data['image'], data['workflow'])
@@ -540,28 +575,39 @@ class ComfyUi(r.BaseJobExecutor):
                   w.a("Workflow ausführen", self.link(self.part_execute),
                       "Vorbereiteten Workflow mit Prompt und Bildern starten")])
         with p.section("Server"):
-            p.prop("Server", html.escape(self.server_url))
-            p.prop("ComfyUI-Pfad", html.escape(self.cfg.get('comfyui_path', '- (nötig für Bilder)')))
-            p.prop("Jobpfad", html.escape(self.cfg.get('jobpath', '.')))
-            p.prop("Workflow-Ordner", html.escape(self.cfg.get('workflow_dir', '-')))
-            p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats'),
-                              hint="Systeminfos des Servers: Betriebssystem, RAM, GPUs und VRAM"))
-            p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue'),
-                              hint="Laufende und wartende Prompts in der ComfyUI-Queue"))
-            p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count'),
-                              hint="Anzahl der wartenden Prompts in der ComfyUI-Queue"))
-            p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free'),
-                              hint="Entlädt die Modelle und gibt RAM und VRAM des Servers frei"))
+            self.server_section(p)
         with p.section("Weitere"):
-            p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt),
-                      "Prompt direkt, als Jobdatei, über MongoDB oder verschlüsselt einreihen"),
-                  w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4),
-                      "Prompt mit dem festen Ideogram-4-Workflow als Jobdatei ablegen"),
-                  w.a("Wert per Titel setzen (Jobdatei)", self.link(self.part_prepareworkflow),
-                      "Jobdatei, die einen Text in den Eingang eines Nodes mit bestimmtem Titel schreibt"),
-                  w.a("Image Transform", self.link(self.part_image_transform),
-                      "Ein Bild in einen Workflow geben, direkt oder als Jobdatei")])
+            self.more_links(p)
         p.pre('', id='result')
+
+    def server_section(self, p: base.Page):
+        """ Abschnitt Server der Startseite """
+        p.prop("Server", html.escape(self.server_url))
+        p.prop("ComfyUI-Pfad", html.escape(self.cfg.get('comfyui_path', '- (nötig für Bilder)')))
+        p.prop("Jobpfad", html.escape(self.cfg.get('jobpath', '.')))
+        p.prop("Workflow-Ordner", html.escape(self.cfg.get('workflow_dir', '-')))
+        self.server_buttons(p)
+
+    def server_buttons(self, p: base.Page):
+        p(self.action_btn(dict(title="Stats", type=self.type, op='rest', route='system_stats'),
+                          hint="Systeminfos des Servers: Betriebssystem, RAM, GPUs und VRAM"))
+        p(self.action_btn(dict(title="Queue", type=self.type, op='rest', route='queue'),
+                          hint="Laufende und wartende Prompts in der ComfyUI-Queue"))
+        p(self.action_btn(dict(title="Queue Count", type=self.type, op='queue_count'),
+                          hint="Anzahl der wartenden Prompts in der ComfyUI-Queue"))
+        p(self.action_btn(dict(title="Speicher freigeben", type=self.type, op='rest', route='free'),
+                          hint="Entlädt die Modelle und gibt RAM und VRAM des Servers frei"))
+
+    def more_links(self, p: base.Page):
+        """ Abschnitt Weitere der Startseite """
+        p.ul([w.a("Prompt mit Queue-Varianten (MongoDB, Crypt, Templates)", self.link(self.part_prompt),
+                  "Prompt direkt, als Jobdatei, über MongoDB oder verschlüsselt einreihen"),
+              w.a("Prompt Ideogram 4", self.link(self.part_prompt_i4),
+                  "Prompt mit dem festen Ideogram-4-Workflow als Jobdatei ablegen"),
+              w.a("Wert per Titel setzen (Jobdatei)", self.link(self.part_prepareworkflow),
+                  "Jobdatei, die einen Text in den Eingang eines Nodes mit bestimmtem Titel schreibt"),
+              w.a("Image Transform", self.link(self.part_image_transform),
+                  "Ein Bild in einen Workflow geben, direkt oder als Jobdatei")])
 
     def part_workflow_table(self, p: base.Page):
         if len(self.workflows()) == 0:

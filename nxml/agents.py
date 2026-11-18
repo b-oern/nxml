@@ -44,7 +44,7 @@ class OpenCodeAgent(r.BaseJobExecutor):
 
     def __init__(self, start=True, port=None, project_path=None, type='opencode', url=None, provider=None,
                  model=None, opencode_bin=None, hostname='127.0.0.1', remote='origin', timeout=3600,
-                 password=None, args: u.Args = None):
+                 password=None, repos=None, args: u.Args = None):
         """
             :param start: opencode-Server beim Erzeugen starten (sonst start_server() oder op=server_start)
             :param port: Port des Servers, None: freier Port (bzw. Port aus url)
@@ -56,6 +56,7 @@ class OpenCodeAgent(r.BaseJobExecutor):
             :param timeout: max. Sekunden für eine Antwort von opencode
             :param password: Passwort bzw. Pairing-Token des Servers (Basic Auth), sonst OPENCODE_SERVER_PASSWORD;
                              beim Selbststarten ohne Passwort wird eines erzeugt
+            :param repos: verfügbare Repositories {name: path}, sonst args.get('repos', {}) (dict oder JSON)
         """
         super().__init__(type)
         if args is None:
@@ -80,8 +81,10 @@ class OpenCodeAgent(r.BaseJobExecutor):
         self.process = None
         self.server_log = []
         self.issues = []
+        self.repos = self.parse_repos(repos if repos is not None else args.get('repos', {}))
+        self.repo = ''  # ausgewähltes Repository (Name aus repos), leer: project_path
         self.lock = threading.Lock()  # nur ein Issue gleichzeitig (gleiches Arbeitsverzeichnis)
-        self.define_vars('project_path', 'url', 'provider', 'model', 'remote')
+        self.define_vars('project_path', 'url', 'provider', 'model', 'remote', 'repo')
         self.define_event('issue_done', {'name': 'Name', 'branch': 'Branch', 'success': 'bool', 'message': 'str'})
         atexit.register(self.stop_server)
         if start:
@@ -221,8 +224,8 @@ class OpenCodeAgent(r.BaseJobExecutor):
     def active_sessions(self):
         return self.api('/api/session/active') or {}
 
-    def create_session(self, title=None, provider='', model=''):
-        body = {'location': {'directory': self.project_path}, 'permissions': self.PERMISSIONS}
+    def create_session(self, title=None, provider='', model='', directory=None):
+        body = {'location': {'directory': directory or self.project_path}, 'permissions': self.PERMISSIONS}
         if title:
             body['title'] = title
         ref = self.model_ref(provider, model)
@@ -325,8 +328,8 @@ class OpenCodeAgent(r.BaseJobExecutor):
 
     # -- Git --
 
-    def git(self, *args, check=True):
-        res = subprocess.run(['git', *args], cwd=self.project_path, capture_output=True, text=True,
+    def git(self, *args, check=True, cwd=None):
+        res = subprocess.run(['git', *args], cwd=cwd or self.project_path, capture_output=True, text=True,
                              encoding='utf-8', errors='replace')
         if check and res.returncode != 0:
             raise OpenCodeError(f'git {" ".join(args)}: {(res.stderr or res.stdout).strip()}')
@@ -339,10 +342,46 @@ class OpenCodeAgent(r.BaseJobExecutor):
             raise OpenCodeError('Name für den Branch fehlt')
         return 'feat_' + slug
 
+    # -- Repositories --
+
+    @staticmethod
+    def parse_repos(repos) -> dict:
+        """ {name: path} aus dict oder JSON-Text """
+        if isinstance(repos, str):
+            repos = json.loads(repos) if repos.strip() else {}
+        return {str(k): os.path.abspath(os.path.expanduser(str(v))) for k, v in (repos or {}).items()}
+
+    def resolve_path(self, path=''):
+        """ Repository-Name aus repos, Pfad oder leer (ausgewähltes Repository bzw. project_path) """
+        path = path or self.repo
+        if not path:
+            return self.project_path
+        if path in self.repos:
+            return self.repos[path]
+        return os.path.abspath(os.path.expanduser(path))
+
+    def repo_info(self, name, path):
+        res = {'name': name, 'path': path, 'exists': os.path.isdir(path), 'selected': name == self.repo,
+               'branch': '', 'dirty': False, 'remote_url': '', 'last_commit': ''}
+        if res['exists']:
+            try:
+                res['branch'] = self.git('rev-parse', '--abbrev-ref', 'HEAD', cwd=path)
+                res['dirty'] = bool(self.git('status', '--porcelain', cwd=path))
+                res['remote_url'] = self.git('remote', 'get-url', self.remote, cwd=path, check=False)
+                res['last_commit'] = self.git('log', '-1', '--format=%h %s (%cr)', cwd=path, check=False)
+            except Exception as e:
+                res['error'] = str(e)
+        return res
+
     # -- Issues --
 
-    def _issue(self, name, task_text, provider, model):
+    def _issue(self, name, task_text, provider, model, path=''):
+        repo = path if path in self.repos else (self.repo if not path else '')
+        path = self.resolve_path(path)
+        if not os.path.isdir(path):
+            raise OpenCodeError(f'Verzeichnis {path} existiert nicht')
         issue = {'id': len(self.issues) + 1, 'name': name, 'branch': self.branch_name(name), 'task': task_text,
+                 'path': path, 'repo': repo,
                  'provider': provider, 'model': model, 'status': 'wartet',
                  'session_id': None, 'response': '', 'commit': '', 'log': [], 'success': None,
                  'started': datetime.datetime.now().isoformat(timespec='seconds'), 'finished': None}
@@ -353,39 +392,45 @@ class OpenCodeAgent(r.BaseJobExecutor):
         def log(msg):
             issue['log'].append(datetime.datetime.now().strftime('%H:%M:%S ') + msg)
             self.info(f"Issue {issue['name']}: {msg}")
+
+        def git(*args, **kwargs):
+            return self.git(*args, cwd=issue['path'], **kwargs)
         with self.lock:
             base_branch = None
             try:
                 if not self.online():
                     issue['status'] = 'starte Server'
                     self.start_server()
-                if self.git('status', '--porcelain'):
+                if issue['path'] != self.project_path:
+                    log('Repository ' + issue['path'])
+                if git('status', '--porcelain'):
                     raise OpenCodeError('Arbeitsverzeichnis hat nicht committete Änderungen')
-                base_branch = self.git('rev-parse', '--abbrev-ref', 'HEAD')
+                base_branch = git('rev-parse', '--abbrev-ref', 'HEAD')
                 branch = issue['branch']
-                exists = self.git('rev-parse', '--verify', '--quiet', 'refs/heads/' + branch, check=False)
+                exists = git('rev-parse', '--verify', '--quiet', 'refs/heads/' + branch, check=False)
                 if exists:
-                    self.git('checkout', branch)
+                    git('checkout', branch)
                     log(f'Branch {branch} ausgecheckt (existierte schon)')
                 else:
-                    self.git('checkout', '-b', branch)
+                    git('checkout', '-b', branch)
                     log(f'Branch {branch} von {base_branch} angelegt')
                 issue['status'] = 'opencode arbeitet'
-                session = self.create_session(f"{branch}: {issue['task'][:60]}", issue['provider'], issue['model'])
+                session = self.create_session(f"{branch}: {issue['task'][:60]}", issue['provider'], issue['model'],
+                                             issue['path'])
                 issue['session_id'] = session['id']
                 log(f"Session {session['id']}, Modell {issue['provider'] or '-'}/{issue['model'] or 'Standard'}")
                 issue['response'] = self.run(session['id'], issue['task'])
                 log('opencode fertig')
                 issue['status'] = 'commit'
-                self.git('add', '-A')
-                if not self.git('status', '--porcelain'):
+                git('add', '-A')
+                if not git('status', '--porcelain'):
                     raise OpenCodeError('opencode hat nichts geändert, kein Commit')
                 message = f"feat: {issue['name']}\n\n{issue['task']}\n\nopencode session {session['id']}"
-                self.git('commit', '-m', message)
-                issue['commit'] = self.git('rev-parse', '--short', 'HEAD')
+                git('commit', '-m', message)
+                issue['commit'] = git('rev-parse', '--short', 'HEAD')
                 log('Commit ' + issue['commit'])
                 issue['status'] = 'push'
-                self.git('push', '-u', self.remote, branch)
+                git('push', '-u', self.remote, branch)
                 log(f'Push nach {self.remote}/{branch}')
                 issue['status'] = 'fertig'
                 issue['success'] = True
@@ -396,11 +441,11 @@ class OpenCodeAgent(r.BaseJobExecutor):
             finally:
                 if base_branch and base_branch != 'HEAD':
                     try:
-                        if self.git('status', '--porcelain'):
+                        if git('status', '--porcelain'):
                             # Reste eines Fehlers bleiben im Branch, nicht in den Ausgangs-Branch mitnehmen
-                            self.git('stash', 'push', '-u', '-m', f"opencode {issue['branch']}")
+                            git('stash', 'push', '-u', '-m', f"opencode {issue['branch']}")
                             log('Nicht committete Änderungen in git stash gesichert')
-                        self.git('checkout', base_branch)
+                        git('checkout', base_branch)
                         log(f'Zurück auf {base_branch}')
                     except Exception as e:
                         log('Fehler beim Zurückwechseln: ' + str(e))
@@ -410,13 +455,14 @@ class OpenCodeAgent(r.BaseJobExecutor):
         return issue
 
     @op("Erstellt den Branch feat_<name>, lässt opencode task_text bearbeiten, committet und pusht den Branch. "
-        "wait=False: läuft im Hintergrund, Stand über op=issues",
+        "path: Repository-Name aus repos oder Pfad (Standard: ausgewähltes Repository bzw. project_path), wait=False: läuft im Hintergrund, Stand über op=list_issues",
         result={'success': 'bool', 'message': 'str', 'issue': 'dict'})
-    def do_issue(self, name: str, task_text: str, wait: bool = False):
+    def do_issue(self, name: str, task_text: str, path: str = '', wait: bool = False):
         """ erstellt einen Branch feat_$name und lässt opencode den task_text bearbeiten,
-            danach wird der Branch committet und gepusht. Provider/Modell: self.provider, self.model (set_model) """
+            danach wird der Branch committet und gepusht. Provider/Modell: self.provider, self.model (set_model)
+            :param path: Name aus repos oder Pfad eines Git-Repositorys, Standard: ausgewähltes Repo bzw. project_path """
         try:
-            issue = self._issue(name, task_text, self.provider, self.model)
+            issue = self._issue(name, task_text, self.provider, self.model, path)
         except OpenCodeError as e:
             return self.fail(str(e))
         if wait:
@@ -472,6 +518,19 @@ class OpenCodeAgent(r.BaseJobExecutor):
         self.provider, self.model = provider, model
         return self.success('ok')
 
+    @op("Verfügbare Repositories (repos) mit Branch, Änderungen und Remote, project ist das Standard-Projekt",
+        result={'success': 'bool', 'repos': 'list', 'selected': 'str', 'project': 'dict'})
+    def list_repos(self):
+        return self.success('ok', repos=[self.repo_info(n, p) for n, p in self.repos.items()], selected=self.repo,
+                            project=self.repo_info('', self.project_path))
+
+    @op("Repository für do_issue auswählen, name leer: project_path", result={'success': 'bool'})
+    def select_repo(self, name: str = ''):
+        if name and name not in self.repos:
+            return self.fail(f'Repository {name} unbekannt')
+        self.repo = name
+        return self.success(f"Repository {name or 'Projekt'} ausgewählt", path=self.resolve_path())
+
     @op("Alle Issues mit Status und Log", result={'success': 'bool', 'issues': 'list'})
     def list_issues(self):
         return self.success('ok', issues=list(reversed(self.issues)))
@@ -517,17 +576,26 @@ class OpenCodeAgent(r.BaseJobExecutor):
 
     # -- Web --
 
-    PAGES = [('index', 'Issues'), ('server', 'Server')]
+    PAGES = [('index', 'Issues'), ('repos', 'Repos'), ('server', 'Server')]
+
+    def opencode_cfg(self) -> dict:
+        """ Konfiguration für das JS der Seiten, remote=True: Ops als asynchrone Jobs (RemoteOpenCode) """
+        return {'type': self.type, 'provider': self.provider, 'model': self.model, 'issues_url': self.link('index')}
 
     def part_page(self, p: b.Page, name, html, js):
         p.nav(*[(title, self.link(page)) for page, title in self.PAGES], active=self.link(name))
-        cfg = json.dumps({'type': self.type, 'provider': self.provider, 'model': self.model}).replace('</', '<\\/')
+        cfg = self.opencode_cfg()
+        remote = '<div class="oc-msg" id="oc-remote"></div>' if cfg.get('remote') else ''
+        cfg = json.dumps(cfg).replace('</', '<\\/')
         p(f'<style>{OPENCODE_CSS}</style>')
-        p(f'<div class="oc">{html}</div>')
+        p(f'<div class="oc">{remote}{html}</div>')
         p(f'<script>(function() {{\nconst OC = {cfg};\n{OPENCODE_JS}\n{js}\n}})();</script>')
 
     def part_index(self, p: b.Page, params={}):
         self.part_page(p, 'index', OPENCODE_ISSUES_HTML, OPENCODE_ISSUES_JS)
+
+    def part_repos(self, p: b.Page, params={}):
+        self.part_page(p, 'repos', OPENCODE_REPOS_HTML, OPENCODE_REPOS_JS)
 
     def part_server(self, p: b.Page, params={}):
         self.part_page(p, 'server', OPENCODE_SERVER_HTML, OPENCODE_SERVER_JS)
@@ -552,6 +620,7 @@ OPENCODE_CSS = """
 .oc-part { margin: 3px 0; font-size: 92%; }
 .oc-part.tool { opacity: .8; font-family: monospace; }
 .oc-part.reasoning { opacity: .6; font-style: italic; }
+.oc-selected td { background: #2a71; }
 .oc-part.info { font-size: 85%; opacity: .7; }
 .oc-table { border-collapse: collapse; }
 .oc-table td, .oc-table th { border: 1px solid #8886; padding: 3px 8px; text-align: left; }
@@ -559,10 +628,34 @@ OPENCODE_CSS = """
 
 OPENCODE_JS = r"""
 const $ = (id) => document.getElementById(id);
-function post(data) {
+function send(data) {
   const body = new URLSearchParams({ type: OC.type, ...data });
   return fetch(location.protocol + '//' + location.host + '/', { method: 'POST', body: body }).then((r) => r.json());
 }
+// Remote (RemoteOpenCode): Job wird nur eingestellt (remote_guid), das Ergebnis per op=remote_result abholen
+function post(data) {
+  if (!OC.remote) return send(data);
+  return send({ ...data, async: 1 }).then((r) => {
+    remoteStatus();
+    return r.remote_guid ? remoteWait(r.remote_guid) : r;
+  });
+}
+function remoteWait(guid) {
+  return new Promise((ok) => setTimeout(ok, OC.poll_ms)).then(() => send({ op: 'remote_result', guid: guid }))
+    .then((r) => {
+      if (r.success && r.pending) return remoteWait(guid);
+      remoteStatus();
+      return r.success ? r.result : r;
+    });
+}
+function remoteStatus() {
+  if (!OC.remote) return;
+  send({ op: 'remote_state' }).then((r) => {
+    $('oc-remote').textContent = 'Remote: ' + r.status;
+    $('oc-remote').classList.toggle('error', !!r.error);
+  });
+}
+if (OC.remote) { remoteStatus(); setInterval(remoteStatus, 5000); }
 function msg(id, text, error) {
   const el = $(id);
   el.textContent = text || '';
@@ -577,6 +670,8 @@ OPENCODE_ISSUES_HTML = """
 <h3>Neues Issue</h3>
 <div class="oc-row"><label for="oc-name">Name</label>
   <input id="oc-name" placeholder="z.B. login_form" size="30"> <span>Branch: <code id="oc-branch">feat_</code></span></div>
+<div class="oc-row"><label for="oc-repo">Repository</label><select id="oc-repo"></select>
+  <input id="oc-path" size="50" placeholder="Pfad zum Repository" style="display:none"></div>
 <div class="oc-row"><label for="oc-provider">Provider</label><select id="oc-provider"></select>
   <label for="oc-model">Modell</label><select id="oc-model"></select>
   <button id="oc-default" title="Als Standard speichern">als Standard</button></div>
@@ -625,7 +720,7 @@ $('oc-run').onclick = () => {
   if (!name || !task) { msg('oc-msg', 'Name und Aufgabe angeben', true); return; }
   $('oc-run').disabled = true;
   post({ op: 'set_model', provider: $('oc-provider').value, model: $('oc-model').value })
-    .then(() => post({ op: 'do_issue', name: name, task_text: task }))
+    .then(() => post({ op: 'do_issue', name: name, task_text: task, path: repoPath() }))
     .then((r) => {
       msg('oc-msg', r.message, !r.success);
       if (r.success) { $('oc-task').value = ''; open[r.issue.id] = true; }
@@ -649,7 +744,7 @@ function loadIssues() {
     box.innerHTML = r.issues.map((i) => '<div class="oc-issue"><h4>' + esc(i.branch)
       + '<span class="oc-st ' + statusClass(i) + '">' + esc(i.status) + '</span>'
       + (i.commit ? ' <code>' + esc(i.commit) + '</code>' : '') + '</h4>'
-      + '<div><small>' + esc(i.started) + ' · ' + esc(i.provider || 'Standard') + '/' + esc(i.model || 'Standard') + '</small></div>'
+      + '<div><small>' + esc(i.started) + ' · ' + esc(i.repo ? i.repo + ': ' : '') + esc(i.path) + ' · ' + esc(i.provider || 'Standard') + '/' + esc(i.model || 'Standard') + '</small></div>'
       + '<details><summary>Aufgabe</summary><pre>' + esc(i.task) + '</pre></details>'
       + '<pre>' + esc(i.log.join('\n')) + '</pre>'
       + (i.response ? '<details><summary>Antwort</summary><pre>' + esc(i.response) + '</pre></details>' : '')
@@ -667,8 +762,67 @@ function loadIssues() {
     if (r.issues.some((i) => i.success == null)) setTimeout(loadIssues, 3000);
   });
 }
+function repoPath() {
+  const v = $('oc-repo').value;
+  return v === '__path' ? $('oc-path').value.trim() : v;
+}
+function loadRepos() {
+  return post({ op: 'list_repos' }).then((r) => {
+    if (!r.success) return;
+    const sel = $('oc-repo');
+    sel.innerHTML = '';
+    sel.add(new Option('Projekt (' + r.project.path + ')', ''));
+    r.repos.forEach((x) => sel.add(new Option(x.name + ' (' + x.path + ')' + (x.exists ? '' : ' - fehlt'), x.name)));
+    sel.add(new Option('anderer Pfad …', '__path'));
+    const pre = new URLSearchParams(location.search).get('repo');
+    sel.value = pre != null && [...sel.options].some((o) => o.value === pre) ? pre : r.selected;
+    sel.onchange();
+  });
+}
+$('oc-repo').onchange = () => {
+  const v = $('oc-repo').value;
+  $('oc-path').style.display = v === '__path' ? '' : 'none';
+  if (v !== '__path') post({ op: 'select_repo', name: v });
+};
+loadRepos();
 loadProviders();
 loadIssues();
+"""
+
+OPENCODE_REPOS_HTML = """
+<h3>Repositories</h3>
+<p><small>Konfiguration: <code>repos</code> ({name: Pfad}), das ausgewählte Repository nutzt do_issue ohne path.</small></p>
+<table class="oc-table" id="oc-repos"></table>
+<div class="oc-row"><button id="oc-refresh">Aktualisieren</button></div>
+<div class="oc-msg" id="oc-msg"></div>
+"""
+
+OPENCODE_REPOS_JS = r"""
+function row(x, label) {
+  const state = !x.exists ? '<span class="oc-st err">fehlt</span>'
+    : esc(x.branch) + (x.dirty ? ' <span class="oc-st err">Änderungen</span>' : ' <span class="oc-st ok">sauber</span>');
+  const issues = OC.issues_url + 'repo=' + encodeURIComponent(x.name);
+  return '<tr' + (x.selected ? ' class="oc-selected"' : '') + '><td>' + (x.selected ? '&#10003; ' : '') + '<b>' + esc(label) + '</b></td>'
+    + '<td><code>' + esc(x.path) + '</code></td><td>' + state + '</td><td>' + esc(x.remote_url) + '</td>'
+    + '<td><small>' + esc(x.last_commit) + '</small></td><td>'
+    + (x.exists ? '<button data-repo="' + esc(x.name) + '"' + (x.selected ? ' disabled' : '') + '>auswählen</button> '
+      + '<a href="' + esc(issues) + '">Issue</a>' : '') + '</td></tr>';
+}
+function load() {
+  post({ op: 'list_repos' }).then((r) => {
+    if (!r.success) { msg('oc-msg', r.message, true); return; }
+    r.project.selected = !r.selected;
+    $('oc-repos').innerHTML = '<tr><th>Name</th><th>Pfad</th><th>Branch</th><th>Remote</th><th>Letzter Commit</th><th></th></tr>'
+      + row(r.project, 'Projekt') + r.repos.map((x) => row(x, x.name)).join('')
+      + (r.repos.length ? '' : '<tr><td colspan="6"><i>keine Repositories in repos konfiguriert</i></td></tr>');
+    document.querySelectorAll('#oc-repos button[data-repo]').forEach((btn) => {
+      btn.onclick = () => post({ op: 'select_repo', name: btn.dataset.repo })
+        .then((x) => { msg('oc-msg', x.message, !x.success); load(); });
+    });
+  });
+}
+$('oc-refresh').onclick = load;
+load();
 """
 
 OPENCODE_SERVER_HTML = """

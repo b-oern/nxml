@@ -75,9 +75,33 @@ opencode: nxml.agents:OpenCodeAgent(project_path="C:/dev/projekt", model="anthro
 Parameter: `start=True` (Server sofort starten), `port=None` (freier Port), `project_path=None` (aktuelles Verzeichnis), `url` (vorhandenen Server nutzen), `password` (Basic Auth bzw. Pairing-Token, beim Selbststarten wird eines erzeugt), `provider`, `model`, `remote="origin"`.
 Genutzt wird die neue API unter `/api` (https://opencode.ai/docs/api), Prompts laufen asynchron, gewartet wird auf die `idle`-Nachricht der Session.
 
-`do_issue(name, task_text, wait=False)` legt den Branch `feat_<name>` an, lässt opencode `task_text` bearbeiten, committet (`feat: <name>`) und pusht den Branch und wechselt zurück auf den Ausgangs-Branch. Läuft ohne `wait` im Hintergrund, Stand über `op=list_issues`.
+`do_issue(name, task_text, path='', wait=False)` legt den Branch `feat_<name>` an, lässt opencode `task_text` bearbeiten, committet (`feat: <name>`) und pusht den Branch und wechselt zurück auf den Ausgangs-Branch. Läuft ohne `wait` im Hintergrund, Stand über `op=list_issues`.
+Mit `path` (Name aus `repos` oder Pfad) arbeitet er in einem anderen Repository als `project_path` (der Server bleibt derselbe, die Session bekommt das Verzeichnis als `location`).
 Provider und Modell kommen aus `provider`/`model` des Agents (`set_model`, UI). Das Arbeitsverzeichnis muss sauber sein; Reste eines fehlgeschlagenen Laufs landen in `git stash`.
 
-UI unter `/pysys/runner?type=opencode`: Issues (Name, Provider/Modell-Auswahl, Aufgabe, Verlauf mit Tool-Aufrufen, Abbrechen) und Server (Status, Start/Stopp, Pairing-Link für die opencode-Web-UI, Sessions).
-Weitere Ops: `status`, `server_start`, `server_stop`, `pairing`, `list_providers`, `set_model`, `list_sessions`, `session_messages`, `abort`, `ask`.
+Ohne `path` nimmt er das ausgewählte Repository (`op=select_repo`, Seite Repos), sonst `project_path`.
+
+Verfügbare Repositories kommen aus `repos` (Parameter oder `args.get("repos")`, dict oder JSON `{name: Pfad}`), z.B. in der Konfiguration:
+
+```
+"repos": {"nxml": "C:/Users/root/dev/nxml", "nwebclient": "C:/Users/root/dev/nwebclient"}
+```
+
+UI unter `/pysys/runner?type=opencode`: Issues (Name, Repository-Auswahl, Provider/Modell-Auswahl, Aufgabe, Verlauf mit Tool-Aufrufen, Abbrechen), Repos (konfigurierte Repositories mit Branch, Änderungen, Remote, letztem Commit; auswählen oder direkt ein Issue anlegen) und Server (Status, Start/Stopp, Pairing-Link für die opencode-Web-UI, Sessions).
+Weitere Ops: `list_repos`, `select_repo`, `status`, `server_start`, `server_stop`, `pairing`, `list_providers`, `set_model`, `list_sessions`, `session_messages`, `abort`, `ask`.
 Konfiguration: `OPENCODE_BIN`, `OPENCODE_URL`, `OPENCODE_PROVIDER`, `OPENCODE_MODEL`, `OPENCODE_SERVER_PASSWORD`. Sessions werden mit allen Berechtigungen angelegt, offene Berechtigungsanfragen werden automatisch erlaubt.
+
+### Remote opencode
+
+`remote_opencode` (`nxml.remote.opencode:RemoteOpenCode`) steuert den `opencode`-Runner einer anderen Instanz über einen Job-Speicher (Standard: MongoDB-Runner `mongodb`, verschlüsselt über den CryptRunner `crypt`). Senden und Abfragen übernimmt `RemoteJobMixin` aus dem Projekt nxrunner (`nxrunner.jobstore`), nxrunner muss installiert sein.
+
+```
+ropencode: nxml.remote.opencode:RemoteOpenCode(target="gpu-pc", store="mongodb", remote_type="opencode")
+```
+
+Gleiche Ops und gleiche Seiten (Issues, Repos, Server) wie `opencode`; die Seiten stellen ihre Aufrufe als asynchrone Jobs ein, die Statuszeile zeigt ausstehende Jobs und Fehler.
+Jobs warten bis zur Antwort (höchstens `wait` Sekunden, Standard 600); mit `async=1` wird der Job nur eingestellt und liefert `remote_guid`, das Ergebnis holt `op=remote_result guid=...` ab. `op=remote_state` liefert die Statuszeile.
+Bei `do_issue` ist `wait` der Parameter von `do_issue`; mit `wait=1` wartet der Job bis zu `timeout` Sekunden (Standard 6000) auf das fertige Issue.
+Die Provider-/Modellliste (`list_providers`) wird zwischengespeichert (Speicher und nweb-Setting `<type>.cache.<target>`, Gültigkeit `cache_ttl`, 0 = unbegrenzt), `set_model` führt sie nach, `refresh=1` bzw. `op=cache_clear` holt sie neu.
+Repositories, Provider und Modell gelten auf der Ziel-Instanz (deren `repos`, `set_model`, `select_repo`). Der Pairing-Link zeigt auf den opencode-Server der Ziel-Instanz.
+Test ohne zweite Instanz: `store: nxrunner.jobstore:DirectJobStore` und `RemoteOpenCode(target="local", store="store", poll_interval=1)`.
