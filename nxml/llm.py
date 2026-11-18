@@ -6,9 +6,13 @@ import json
 import docker
 import time
 import base64
+import threading
+from html import escape as esc
+from typing import Optional
 
 from nwebclient import NWebClient
 from nwebclient import runner as r
+from nwebclient.runner import op
 from nwebclient import base as b
 from nwebclient import web as w
 from nwebclient import util as u
@@ -53,7 +57,18 @@ class BaseLLM(r.BaseJobExecutor):
             return self.cprompt(data)
         return super().execute(data)
 
+    LLM_PAGES = [('index', 'Prompt'), ('queue', 'Queue')]
+
+    def part_llm_nav(self, p: b.Page, name):
+        p.nav(*[(title, self.link(page)) for page, title in self.LLM_PAGES], active=self.link(name))
+
+    def part_queue(self, p: b.Page, params={}):
+        """ ausstehende Prompts dieses LLM aus queue_prompts (LlmQueue) """
+        self.part_llm_nav(p, 'queue')
+        part_queue_prompts(p, self)
+
     def part_index(self, p: b.Page, params={}):
+        self.part_llm_nav(p, 'index')
         #p.input('prompt', id='prompt')
         p('<textarea style="width:90%; height:300px" name="prompt" id="prompt"></textarea>')
         func = """
@@ -276,7 +291,8 @@ class LMStudioUiMixin:
 
     # -- Web --
 
-    PAGES = [('index', 'Status'), ('models', 'Modelle'), ('chat', 'Chat'), ('embeddings', 'Embeddings')]
+    PAGES = [('index', 'Status'), ('models', 'Modelle'), ('chat', 'Chat'), ('embeddings', 'Embeddings'),
+             ('queue', 'Queue')]
 
     def part_page(self, p: b.Page, name, html, js):
         p.nav(*[(title, self.link(page)) for page, title in self.PAGES], active=self.link(name))
@@ -299,6 +315,10 @@ class LMStudioUiMixin:
 
     def part_embeddings(self, p: b.Page, params={}):
         self.part_page(p, 'embeddings', LMSTUDIO_EMBED_HTML, LMSTUDIO_EMBED_JS)
+
+    def part_queue(self, p: b.Page, params={}):
+        p.nav(*[(title, self.link(page)) for page, title in self.PAGES], active=self.link('queue'))
+        part_queue_prompts(p, self)
 
 
 class LMStudio(LMStudioUiMixin, BaseLLM):
@@ -1262,3 +1282,305 @@ class Vision(r.BaseJobExecutor):
         from nwebclient import NWebClient
         nc = NWebClient(None)
         nc.mapDocMeta(self.meta_ns, self.meta_name, filterArgs='kind=image', limit=self.limit, update=True, mapFunction=self.mapFn)
+
+
+class QueuePromptTable:
+    """
+      Prompts in queue_prompts der nweb-Persistence (sqlite oder MySQL), ohne Persistence nur im Speicher.
+
+      status: queued (ausstehend), running, done, error
+    """
+
+    TABLE = 'queue_prompts'
+    COLS = ('guid', 'llm', 'prompt', 'on_done', 'status', 'created', 'started', 'done', 'response', 'message')
+    JSON_COLS = ('on_done',)
+    OPEN = ('queued', 'running')
+
+    def __init__(self, nw=None):
+        self.nw = nw
+        self.memory = {}
+        self.lock = threading.RLock()
+        if nw is not None:
+            nw.dml(f"""CREATE TABLE IF NOT EXISTS {self.TABLE} (
+                guid varchar(64) NOT NULL PRIMARY KEY,
+                llm varchar(255) DEFAULT NULL,
+                prompt text,
+                on_done text,
+                status varchar(32) DEFAULT NULL,
+                created REAL DEFAULT NULL,
+                started REAL DEFAULT NULL,
+                done REAL DEFAULT NULL,
+                response text,
+                message text
+            )""")
+
+    @property
+    def persistent(self) -> bool:
+        return self.nw is not None
+
+    def _encode(self, row: dict) -> dict:
+        return {k: (json.dumps(v, default=str) if k in self.JSON_COLS and v is not None else v)
+                for k, v in row.items() if k in self.COLS}
+
+    def _decode(self, values) -> dict:
+        row = dict(zip(self.COLS, values))
+        for k in self.JSON_COLS:
+            try:
+                row[k] = json.loads(row[k]) if row[k] else None
+            except ValueError:
+                pass
+        return row
+
+    def insert(self, row: dict):
+        with self.lock:
+            if self.nw is None:
+                self.memory[row['guid']] = dict(row)
+            else:
+                self.nw.insert(self.TABLE, self._encode(row))
+
+    def update(self, guid: str, **values):
+        with self.lock:
+            if self.nw is None:
+                if guid in self.memory:
+                    self.memory[guid].update(values)
+                return
+            values = self._encode(values)
+            if values:
+                sets = ', '.join(f'{k} = ?' for k in values)
+                self.nw.dml(f"UPDATE {self.TABLE} SET {sets} WHERE guid = ?", [*values.values(), guid])
+
+    def get(self, guid: str) -> Optional[dict]:
+        with self.lock:
+            if self.nw is None:
+                row = self.memory.get(guid)
+                return dict(row) if row is not None else None
+            rows = self.nw.select(f"SELECT {', '.join(self.COLS)} FROM {self.TABLE} WHERE guid = ?", [guid])
+            return self._decode(rows[0]) if rows else None
+
+    def rows(self, llm: str = None, status=None, limit=500, oldest_first=False) -> list:
+        """ :return: neueste zuerst (oldest_first: älteste zuerst) """
+        with self.lock:
+            if self.nw is None:
+                res = [dict(row) for row in self.memory.values()
+                       if (llm is None or row['llm'] == llm) and (status is None or row['status'] in status)]
+                return sorted(res, key=lambda row: row['created'] or 0, reverse=not oldest_first)[:limit]
+            where, params = [], []
+            if llm is not None:
+                where.append('llm = ?')
+                params.append(llm)
+            if status is not None:
+                where.append(f"status IN ({', '.join('?' for _ in status)})")
+                params.extend(status)
+            sql = f"SELECT {', '.join(self.COLS)} FROM {self.TABLE}"
+            sql += (' WHERE ' + ' AND '.join(where)) if where else ''
+            sql += f" ORDER BY created {'ASC' if oldest_first else 'DESC'} LIMIT {int(limit)}"
+            return [self._decode(values) for values in self.nw.select(sql, params)]
+
+    def delete(self, guid: str):
+        with self.lock:
+            if self.nw is None:
+                self.memory.pop(guid, None)
+            else:
+                self.nw.dml(f"DELETE FROM {self.TABLE} WHERE guid = ?", [guid])
+
+
+def replace_response(value, response: str):
+    """ ersetzt '#response' in Werten (auch verschachtelt) durch die Antwort des LLM """
+    if isinstance(value, dict):
+        return {k: replace_response(v, response) for k, v in value.items()}
+    if isinstance(value, list):
+        return [replace_response(v, response) for v in value]
+    if isinstance(value, str):
+        return response if value == '#response' else value.replace('#response', response)
+    return value
+
+
+def nweb_store_of(runner):
+    """ nweb-Persistence (root.nweb) mit dml/select/insert oder None """
+    root = runner.getRoot()
+    nw = getattr(root, 'nweb', None) if root is not None else None
+    return nw if nw is not None and all(hasattr(nw, m) for m in ('dml', 'select', 'insert')) else None
+
+
+class LlmQueue(r.BaseJobExecutor):
+    """
+      Warteschlange für Prompts: Prompts werden in queue_prompts (nweb-Persistence) gespeichert und
+      nacheinander vom LLM-Runner verarbeitet. Danach wird der Job on_done ausgeführt, '#response' wird
+      darin durch die Antwort ersetzt.
+
+        Config (runners):
+            llm_queue: nxml.llm:LlmQueue(llm="lmstudio")
+
+        Jobs:
+            {"type": "llm_queue", "op": "prompt", "prompt": "Hallo",
+             "on_done": {"type": "log", "message": "#response"}}
+    """
+
+    TAGS = ['llm']
+
+    def __init__(self, type='llm_queue', llm='llm', interval=5):
+        """
+        :param llm: type des LLM-Runners, der die Prompts verarbeitet
+        :param interval: Sekunden, nach denen der Worker erneut nach ausstehenden Prompts sucht
+        """
+        super().__init__(type)
+        self.llm = llm
+        self.interval = float(interval)
+        self.table = None
+        self.table_lock = threading.Lock()
+        self.wakeup = threading.Event()
+        self.worker = None
+        self.processed = 0
+        self.define_vars('llm', 'interval', 'processed')
+
+    # --- Persistenz -----------------------------------------------------------------------------
+
+    def prompts_table(self) -> QueuePromptTable:
+        """ Tabelle beim ersten Zugriff anlegen (root.nweb ist erst dann gesetzt) und den Worker starten """
+        with self.table_lock:
+            if self.table is None:
+                try:
+                    self.table = QueuePromptTable(nweb_store_of(self))
+                except Exception as e:
+                    self.error("queue_prompts nicht verfügbar: " + str(e))
+                    self.table = QueuePromptTable(None)
+                # nach einem Neustart abgebrochene Prompts erneut verarbeiten
+                for row in self.table.rows(status=('running',)):
+                    self.table.update(row['guid'], status='queued')
+            self.start_worker()
+            return self.table
+
+    # --- Worker ---------------------------------------------------------------------------------
+
+    def start_worker(self):
+        if self.worker is None or not self.worker.is_alive():
+            self.worker = threading.Thread(target=self.work, daemon=True, name=f'{self.type}-worker')
+            self.worker.start()
+
+    def work(self):
+        while True:
+            try:
+                rows = self.table.rows(status=('queued',), limit=1, oldest_first=True)
+                if rows:
+                    self.process(rows[0])
+                    continue
+            except Exception as e:
+                self.error("LlmQueue: " + str(e))
+            self.wakeup.wait(self.interval)
+            self.wakeup.clear()
+
+    def run_job(self, job: dict) -> dict:
+        root = self.getRoot()
+        if root is None or root is self:
+            raise Exception('kein Dispatcher für ' + str(job.get('type')))
+        return root.execute(dict(job))
+
+    def process(self, row: dict):
+        guid = row['guid']
+        llm = row['llm'] or self.llm
+        self.table.update(guid, status='running', started=time.time())
+        try:
+            res = self.run_job({'type': llm, 'prompt': row['prompt']})
+            if not isinstance(res, dict) or 'response' not in res:
+                msg = res.get('message', '') if isinstance(res, dict) else str(res)
+                raise Exception('keine Antwort vom LLM ' + llm + (': ' + str(msg) if msg else ''))
+            response = str(res['response'])
+        except Exception as e:
+            self.table.update(guid, status='error', done=time.time(), message=str(e))
+            self.error(f"Prompt {guid}: {e}")
+            return
+        self.table.update(guid, status='done', done=time.time(), response=response, message='ok')
+        self.processed += 1
+        self.emit_event('prompt_done', guid=guid, llm=llm, response=response)
+        if row.get('on_done'):
+            try:
+                res = self.run_job(replace_response(row['on_done'], response))
+                if isinstance(res, dict) and res.get('success') is False:
+                    self.table.update(guid, message='on_done: ' + str(res.get('message', 'fehlgeschlagen')))
+            except Exception as e:
+                self.table.update(guid, message='on_done: ' + str(e))
+                self.error(f"on_done {guid}: {e}")
+
+    # --- Ops ------------------------------------------------------------------------------------
+
+    @op("Stellt einen Prompt in die Queue (queue_prompts). on_done: Job, der ausgeführt wird, wenn der Prompt "
+        "verarbeitet wurde, '#response' wird darin durch die Antwort ersetzt. llm: type des LLM-Runners",
+        result={'success': 'bool', 'guid': 'str'})
+    def prompt(self, prompt: str, guid: str = None, on_done: dict = None, llm: str = ''):
+        table = self.prompts_table()
+        guid = guid or u.guid()
+        if table.get(guid) is not None:
+            return self.fail('guid existiert bereits: ' + guid, guid=guid)
+        table.insert({'guid': guid, 'llm': llm or self.llm, 'prompt': prompt, 'on_done': on_done or None,
+                      'status': 'queued', 'created': time.time()})
+        self.wakeup.set()
+        return self.success('queued', guid=guid)
+
+    @op("Status und Antwort eines Prompts", result={'success': 'bool', 'prompt': 'dict'})
+    def get(self, guid: str):
+        row = self.prompts_table().get(guid)
+        return self.success('ok', prompt=row) if row else self.fail('unbekannte guid')
+
+    @op("Prompts aus queue_prompts, status: Komma-getrennt (z.B. queued,running), leer: alle",
+        result={'success': 'bool', 'prompts': 'list'})
+    def list_prompts(self, status: str = '', llm: str = '', limit: int = 100):
+        st = tuple(s.strip() for s in status.split(',') if s.strip()) or None
+        return self.success('ok', prompts=self.prompts_table().rows(llm or None, st, limit))
+
+    @op("Prompt aus der Queue entfernen", result={'success': 'bool'})
+    def delete(self, guid: str):
+        self.prompts_table().delete(guid)
+        return self.success('gelöscht')
+
+    # --- Web ------------------------------------------------------------------------------------
+
+    def part_index(self, p: b.Page, params={}):
+        table = self.prompts_table()
+        p.prop("LLM", self.llm)
+        p.prop("Gespeichert", f'ja ({QueuePromptTable.TABLE})' if table.persistent else
+               'nein, keine nweb-Persistence, nur bis zum Neustart')
+        p.prop("Verarbeitet", str(self.processed))
+        p.h3("Ausstehende Prompts")
+        part_prompt_table(p, table.rows(status=QueuePromptTable.OPEN, oldest_first=True))
+        p.h3("Zuletzt verarbeitet")
+        part_prompt_table(p, table.rows(status=('done', 'error'), limit=20))
+
+
+def part_prompt_table(p: b.Page, rows: list):
+    if not rows:
+        p.div('Keine Prompts.')
+        return
+    html = '<table class="table"><tr><th>Erstellt</th><th>LLM</th><th>Status</th><th>Prompt</th>' \
+           '<th>on_done</th><th>Antwort / Meldung</th></tr>'
+    for row in rows:
+        created = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row['created'])) if row.get('created') else ''
+        prompt = str(row.get('prompt') or '')
+        info = str(row.get('response') or row.get('message') or '')
+        on_done = json.dumps(row['on_done']) if row.get('on_done') else ''
+        html += f'<tr title="{esc(str(row["guid"]))}"><td>{esc(created)}</td><td>{esc(str(row.get("llm") or ""))}</td>' \
+                f'<td>{esc(str(row.get("status") or ""))}</td><td>{esc(prompt[:300])}</td>' \
+                f'<td><code>{esc(on_done[:200])}</code></td><td>{esc(info[:300])}</td></tr>'
+    p(html + '</table>')
+
+
+def part_queue_prompts(p: b.Page, llm_runner):
+    """ ausstehende Prompts für den LLM-Runner (aus geladenen LlmQueue-Runnern bzw. direkt aus queue_prompts) """
+    dispatcher = next((x for x in llm_runner.getParents() if hasattr(x, 'get_runner_by_class')), None)
+    queues = dispatcher.get_runner_by_class('LlmQueue') if dispatcher is not None else []
+    rows, persistent = {}, False
+    try:
+        for q in queues:
+            table = q.prompts_table()
+            persistent = persistent or table.persistent
+            for row in table.rows(llm_runner.type, QueuePromptTable.OPEN):
+                rows[row['guid']] = row
+        nw = nweb_store_of(llm_runner)
+        if not persistent and nw is not None:
+            for row in QueuePromptTable(nw).rows(llm_runner.type, QueuePromptTable.OPEN):
+                rows[row['guid']] = row
+    except Exception as e:
+        p.div('Fehler beim Lesen der Queue: ' + esc(str(e)))
+    p.h3(f"Ausstehende Prompts ({len(rows)})")
+    part_prompt_table(p, sorted(rows.values(), key=lambda row: row.get('created') or 0))
+    if not queues:
+        p.div('Kein LlmQueue-Runner geladen, z.B. llm_queue: nxml.llm:LlmQueue(llm="' + esc(llm_runner.type) + '")')
