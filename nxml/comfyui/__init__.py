@@ -52,7 +52,7 @@ class ComfyUi(r.BaseJobExecutor):
                   die Bilder werden nach comfyui_path/input geschrieben
     """
 
-    MODULES = ['opencv-python', 'torch', 'torchvision']
+    MODULES = []
     PROMPT_TITLE = 'Positive Prompt'
     PROMPT_KEYS = ('text', 'prompt')
     IMAGE_CLASSES = ('LoadImage',)
@@ -901,8 +901,6 @@ class ComfyUi(r.BaseJobExecutor):
         p.prop("Server", w.a(html.escape(self.server_url), self.server_url))
         wf_dir = self.instance_workflow_dir()
         p.prop("Quelle", html.escape(wf_dir) if wf_dir else "API der Instanz (comfyui_path nicht gesetzt)")
-        p.div("Offene Tabs speichert das ComfyUI-Frontend nur im Browser, angezeigt werden daher die in der "
-              "Instanz gespeicherten Workflows (user/default/workflows).", _class='muted')
         p(self.link_btn("Assets", self.link(self.part_instance_assets),
                         hint="Ausgaben und Eingaben der ComfyUI-Instanz (output, input)"))
         try:
@@ -911,24 +909,28 @@ class ComfyUi(r.BaseJobExecutor):
             p.alert_warn("Instanz nicht erreichbar: " + html.escape(str(e)))
             workflows = None
         if workflows is not None:
-            with p.section(f"Workflows ({len(workflows)})"):
-                if len(workflows) == 0:
-                    p.div("Keine gespeicherten Workflows.")
-                else:
-                    p('<table class="comfyui_workflows"><tr><th>Workflow</th><th>Geändert</th><th>Größe</th></tr>')
-                    for item in workflows:
-                        path = str(item.get('path', ''))
-                        modified = item.get('modified')
-                        modified = time.strftime('%Y-%m-%d %H:%M', time.localtime(modified / 1000 if modified > 1e11 else modified)) \
-                            if isinstance(modified, (int, float)) else '-'
-                        size = item.get('size')
-                        size = f"{size / 1024:.1f} KB" if isinstance(size, (int, float)) else '-'
-                        link = w.a(html.escape(path), self.link_workflow(self.part_instance_workflow, path),
-                                   "Parameter einstellen und ausführen")
-                        p(f'<tr><td title="{html.escape(str(item.get("file", path)))}">{link}</td>'
-                          f'<td>{modified}</td><td>{size}</td></tr>')
-                    p('</table>')
+            self.part_instance_table(p, workflows)
         p.div(w.a("Zurück", self.link(self.part_index)))
+
+    def part_instance_table(self, p: base.Page, workflows: list):
+        """ Tabelle der Workflows aus instance_workflows (auch fuer RemoteComfy) """
+        with p.section(f"Workflows ({len(workflows)})"):
+            if len(workflows) == 0:
+                p.div("Keine gespeicherten Workflows.")
+                return
+            p('<table class="comfyui_workflows"><tr><th>Workflow</th><th>Geändert</th><th>Größe</th></tr>')
+            for item in workflows:
+                path = str(item.get('path', ''))
+                modified = item.get('modified')
+                modified = time.strftime('%Y-%m-%d %H:%M', time.localtime(modified / 1000 if modified > 1e11 else modified)) \
+                    if isinstance(modified, (int, float)) else '-'
+                size = item.get('size')
+                size = f"{size / 1024:.1f} KB" if isinstance(size, (int, float)) else '-'
+                link = w.a(html.escape(path), self.link_workflow(self.part_instance_workflow, path),
+                           "Parameter einstellen und ausführen")
+                p(f'<tr><td title="{html.escape(str(item.get("file", path)))}">{link}</td>'
+                  f'<td>{modified}</td><td>{size}</td></tr>')
+            p('</table>')
 
     @staticmethod
     def part_param_input(p: base.Page, prm: dict, hid: str):
