@@ -1404,34 +1404,32 @@ def nweb_store_of(runner):
 
 class LlmQueue(r.BaseJobExecutor):
     """
-      Warteschlange für Prompts: Prompts werden in queue_prompts (nweb-Persistence) gespeichert und
-      nacheinander vom LLM-Runner verarbeitet. Danach wird der Job on_done ausgeführt, '#response' wird
-      darin durch die Antwort ersetzt.
+      Allgemeine Warteschlange für Prompts an beliebige LLM-Runner: Prompts werden in queue_prompts
+      (nweb-Persistence) gespeichert und nacheinander vom jeweils angegebenen LLM-Runner verarbeitet.
+      Danach wird der Job on_done ausgeführt, '#response' wird darin durch die Antwort ersetzt.
 
         Config (runners):
-            llm_queue: nxml.llm:LlmQueue(llm="lmstudio")
+            llm_queue: nxml.llm:LlmQueue
 
         Jobs:
-            {"type": "llm_queue", "op": "prompt", "prompt": "Hallo",
+            {"type": "llm_queue", "op": "prompt", "llm": "lmstudio", "prompt": "Hallo",
              "on_done": {"type": "log", "message": "#response"}}
     """
 
     TAGS = ['llm']
 
-    def __init__(self, type='llm_queue', llm='llm', interval=5):
+    def __init__(self, type='llm_queue', interval=5):
         """
-        :param llm: type des LLM-Runners, der die Prompts verarbeitet
         :param interval: Sekunden, nach denen der Worker erneut nach ausstehenden Prompts sucht
         """
         super().__init__(type)
-        self.llm = llm
         self.interval = float(interval)
         self.table = None
         self.table_lock = threading.Lock()
         self.wakeup = threading.Event()
         self.worker = None
         self.processed = 0
-        self.define_vars('llm', 'interval', 'processed')
+        self.define_vars('interval', 'processed')
 
     # --- Persistenz -----------------------------------------------------------------------------
 
@@ -1477,9 +1475,11 @@ class LlmQueue(r.BaseJobExecutor):
 
     def process(self, row: dict):
         guid = row['guid']
-        llm = row['llm'] or self.llm
+        llm = row['llm']
         self.table.update(guid, status='running', started=time.time())
         try:
+            if not llm:
+                raise Exception('kein LLM-Runner angegeben')
             res = self.run_job({'type': llm, 'prompt': row['prompt']})
             if not isinstance(res, dict) or 'response' not in res:
                 msg = res.get('message', '') if isinstance(res, dict) else str(res)
@@ -1506,12 +1506,14 @@ class LlmQueue(r.BaseJobExecutor):
     @op("Stellt einen Prompt in die Queue (queue_prompts). on_done: Job, der ausgeführt wird, wenn der Prompt "
         "verarbeitet wurde, '#response' wird darin durch die Antwort ersetzt. llm: type des LLM-Runners",
         result={'success': 'bool', 'guid': 'str'})
-    def prompt(self, prompt: str, guid: str = None, on_done: dict = None, llm: str = ''):
+    def prompt(self, prompt: str, llm: str, guid: str = None, on_done: dict = None):
+        if not llm:
+            return self.fail('llm fehlt: type des LLM-Runners angeben')
         table = self.prompts_table()
         guid = guid or u.guid()
         if table.get(guid) is not None:
             return self.fail('guid existiert bereits: ' + guid, guid=guid)
-        table.insert({'guid': guid, 'llm': llm or self.llm, 'prompt': prompt, 'on_done': on_done or None,
+        table.insert({'guid': guid, 'llm': llm, 'prompt': prompt, 'on_done': on_done or None,
                       'status': 'queued', 'created': time.time()})
         self.wakeup.set()
         return self.success('queued', guid=guid)
@@ -1536,7 +1538,6 @@ class LlmQueue(r.BaseJobExecutor):
 
     def part_index(self, p: b.Page, params={}):
         table = self.prompts_table()
-        p.prop("LLM", self.llm)
         p.prop("Gespeichert", f'ja ({QueuePromptTable.TABLE})' if table.persistent else
                'nein, keine nweb-Persistence, nur bis zum Neustart')
         p.prop("Verarbeitet", str(self.processed))
@@ -1583,4 +1584,4 @@ def part_queue_prompts(p: b.Page, llm_runner):
     p.h3(f"Ausstehende Prompts ({len(rows)})")
     part_prompt_table(p, sorted(rows.values(), key=lambda row: row.get('created') or 0))
     if not queues:
-        p.div('Kein LlmQueue-Runner geladen, z.B. llm_queue: nxml.llm:LlmQueue(llm="' + esc(llm_runner.type) + '")')
+        p.div('Kein LlmQueue-Runner geladen, z.B. llm_queue: nxml.llm:LlmQueue')
