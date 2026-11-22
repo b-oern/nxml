@@ -19,6 +19,12 @@ dependencies = [
     "ollama",
 ]
 
+[project.optional-dependencies]
+rag = ["numpy"]
+rag-hugging = ["numpy", "sentence-transformers"]
+rag-postgres = ["numpy", "psycopg[binary]"]
+rag-qdrant = ["numpy", "qdrant-client"]
+
 [project.urls]
 Homepage = "https://bsnx.net/4.0/group/pynwebclient"
 
@@ -27,6 +33,7 @@ nlp = "nxml.analyse:NlpPipeline"
 toxity = "nxml.analyse:Toxity"
 flair = "nxml.analyse:FlairRunner"
 bert = "nxml.analyse:BertEmbeddings"
+text_embed = "nxml.analyse:TextEmbeddings"
 nsfw = "nxml.analyse:NsfwDetector"
 age = "nxml.analyse:AgeAndGenderRunner"
 clip = "nxml.analyse:ClipEmbeddings"
@@ -52,6 +59,9 @@ video_ocr = "nxml.video.ocr:VideoOcr"
 summarize = "nxml.nlp:TextSummarization"
 mail_respond = "nxml.nlp:MailRespond"
 jeff = "nxml.nlp:Jeff"
+prompt_edit = "nxml.prompt_edit:PromptEditor"
+order_extract = "nxml.order_extract:OrderExtractor"
+rag = "nxml.rag:RagRunner"
 
 
 llmqueue = "nxml.llm:LlmQueue"
@@ -83,7 +93,7 @@ comfyui = "nxml.comfyui:ComfyUi"
 imap = "nxml.data:Imap"
 
 [tool.setuptools]
-packages = ["nxml", "nxml.video", "nxml.remote", "nxml.comfyui", "nxml.vision"]
+packages = ["nxml", "nxml.rag", "nxml.video", "nxml.remote", "nxml.comfyui", "nxml.vision"]
 include-package-data = true
 
 [tool.setuptools.package-data]

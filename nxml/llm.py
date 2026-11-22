@@ -21,6 +21,7 @@ from nwebclient import dev as d
 from nwebclient.dev import Param, PStr
 
 from nxml import nlp
+from nxml.store import NwebTable, nweb_store_of, parse_tags
 
 
 class BaseLLM(r.BaseJobExecutor):
@@ -1284,104 +1285,43 @@ class Vision(r.BaseJobExecutor):
         nc.mapDocMeta(self.meta_ns, self.meta_name, filterArgs='kind=image', limit=self.limit, update=True, mapFunction=self.mapFn)
 
 
-class QueuePromptTable:
+class QueuePromptTable(NwebTable):
     """
       Prompts in queue_prompts der nweb-Persistence (sqlite oder MySQL), ohne Persistence nur im Speicher.
 
-      status: queued (ausstehend), running, done, error
+      status: held (wartet auf run_batch), queued (ausstehend), running, done, error
+      tags: JSON-Liste, Prompts mit gleichem Tag können per LlmQueue.run_batch gesammelt verarbeitet werden
     """
 
     TABLE = 'queue_prompts'
-    COLS = ('guid', 'llm', 'prompt', 'on_done', 'status', 'created', 'started', 'done', 'response', 'message')
-    JSON_COLS = ('on_done',)
-    OPEN = ('queued', 'running')
+    SCHEMA = {
+        'guid': 'varchar(64)',
+        'llm': 'varchar(255) DEFAULT NULL',
+        'prompt': 'text',
+        'on_done': 'text',
+        'status': 'varchar(32) DEFAULT NULL',
+        'created': 'REAL DEFAULT NULL',
+        'started': 'REAL DEFAULT NULL',
+        'done': 'REAL DEFAULT NULL',
+        'response': 'text',
+        'message': 'text',
+        'tags': 'text',
+    }
+    JSON_COLS = ('on_done', 'tags')
+    OPEN = ('held', 'queued', 'running')
 
-    def __init__(self, nw=None):
-        self.nw = nw
-        self.memory = {}
-        self.lock = threading.RLock()
-        if nw is not None:
-            nw.dml(f"""CREATE TABLE IF NOT EXISTS {self.TABLE} (
-                guid varchar(64) NOT NULL PRIMARY KEY,
-                llm varchar(255) DEFAULT NULL,
-                prompt text,
-                on_done text,
-                status varchar(32) DEFAULT NULL,
-                created REAL DEFAULT NULL,
-                started REAL DEFAULT NULL,
-                done REAL DEFAULT NULL,
-                response text,
-                message text
-            )""")
-
-    @property
-    def persistent(self) -> bool:
-        return self.nw is not None
-
-    def _encode(self, row: dict) -> dict:
-        return {k: (json.dumps(v, default=str) if k in self.JSON_COLS and v is not None else v)
-                for k, v in row.items() if k in self.COLS}
-
-    def _decode(self, values) -> dict:
-        row = dict(zip(self.COLS, values))
-        for k in self.JSON_COLS:
-            try:
-                row[k] = json.loads(row[k]) if row[k] else None
-            except ValueError:
-                pass
-        return row
-
-    def insert(self, row: dict):
-        with self.lock:
-            if self.nw is None:
-                self.memory[row['guid']] = dict(row)
-            else:
-                self.nw.insert(self.TABLE, self._encode(row))
-
-    def update(self, guid: str, **values):
-        with self.lock:
-            if self.nw is None:
-                if guid in self.memory:
-                    self.memory[guid].update(values)
-                return
-            values = self._encode(values)
-            if values:
-                sets = ', '.join(f'{k} = ?' for k in values)
-                self.nw.dml(f"UPDATE {self.TABLE} SET {sets} WHERE guid = ?", [*values.values(), guid])
-
-    def get(self, guid: str) -> Optional[dict]:
-        with self.lock:
-            if self.nw is None:
-                row = self.memory.get(guid)
-                return dict(row) if row is not None else None
-            rows = self.nw.select(f"SELECT {', '.join(self.COLS)} FROM {self.TABLE} WHERE guid = ?", [guid])
-            return self._decode(rows[0]) if rows else None
-
-    def rows(self, llm: str = None, status=None, limit=500, oldest_first=False) -> list:
+    def rows(self, llm: str = None, status=None, limit=500, oldest_first=False, tag: str = None) -> list:
         """ :return: neueste zuerst (oldest_first: älteste zuerst) """
-        with self.lock:
-            if self.nw is None:
-                res = [dict(row) for row in self.memory.values()
-                       if (llm is None or row['llm'] == llm) and (status is None or row['status'] in status)]
-                return sorted(res, key=lambda row: row['created'] or 0, reverse=not oldest_first)[:limit]
-            where, params = [], []
-            if llm is not None:
-                where.append('llm = ?')
-                params.append(llm)
-            if status is not None:
-                where.append(f"status IN ({', '.join('?' for _ in status)})")
-                params.extend(status)
-            sql = f"SELECT {', '.join(self.COLS)} FROM {self.TABLE}"
-            sql += (' WHERE ' + ' AND '.join(where)) if where else ''
-            sql += f" ORDER BY created {'ASC' if oldest_first else 'DESC'} LIMIT {int(limit)}"
-            return [self._decode(values) for values in self.nw.select(sql, params)]
+        return self.find({'llm': llm, 'status': tuple(status) if status is not None else None},
+                         limit=limit, oldest_first=oldest_first, tag=tag)
 
-    def delete(self, guid: str):
-        with self.lock:
-            if self.nw is None:
-                self.memory.pop(guid, None)
-            else:
-                self.nw.dml(f"DELETE FROM {self.TABLE} WHERE guid = ?", [guid])
+    def tag_counts(self, status=('held', 'queued')) -> dict:
+        """ Anzahl der Prompts je Tag (mit status) """
+        res = {}
+        for row in self.rows(status=status, limit=0):
+            for t in row.get('tags') or []:
+                res[t] = res.get(t, 0) + 1
+        return res
 
 
 def replace_response(value, response: str):
@@ -1393,13 +1333,6 @@ def replace_response(value, response: str):
     if isinstance(value, str):
         return response if value == '#response' else value.replace('#response', response)
     return value
-
-
-def nweb_store_of(runner):
-    """ nweb-Persistence (root.nweb) mit dml/select/insert oder None """
-    root = runner.getRoot()
-    nw = getattr(root, 'nweb', None) if root is not None else None
-    return nw if nw is not None and all(hasattr(nw, m) for m in ('dml', 'select', 'insert')) else None
 
 
 class LlmQueue(r.BaseJobExecutor):
@@ -1414,6 +1347,11 @@ class LlmQueue(r.BaseJobExecutor):
         Jobs:
             {"type": "llm_queue", "op": "prompt", "llm": "lmstudio", "prompt": "Hallo",
              "on_done": {"type": "log", "message": "#response"}}
+
+        Stapel: Prompts mit tags und hold=1 bleiben liegen (status held), bis run_batch alle Prompts eines
+        Tags auf einmal verarbeitet (je LLM-Runner direkt nacheinander, das Modell bleibt dabei geladen):
+            {"type": "llm_queue", "op": "prompt", "llm": "lmstudio", "prompt": "...", "tags": ["order"], "hold": 1}
+            {"type": "llm_queue", "op": "run_batch", "tag": "order"}
     """
 
     TAGS = ['llm']
@@ -1426,6 +1364,9 @@ class LlmQueue(r.BaseJobExecutor):
         self.interval = float(interval)
         self.table = None
         self.table_lock = threading.Lock()
+        # Worker und run_batch verarbeiten nie gleichzeitig
+        self.process_lock = threading.RLock()
+        self.batches = {}
         self.wakeup = threading.Event()
         self.worker = None
         self.processed = 0
@@ -1458,9 +1399,11 @@ class LlmQueue(r.BaseJobExecutor):
     def work(self):
         while True:
             try:
-                rows = self.table.rows(status=('queued',), limit=1, oldest_first=True)
+                with self.process_lock:
+                    rows = self.table.rows(status=('queued',), limit=1, oldest_first=True)
+                    if rows:
+                        self.process(rows[0])
                 if rows:
-                    self.process(rows[0])
                     continue
             except Exception as e:
                 self.error("LlmQueue: " + str(e))
@@ -1506,28 +1449,82 @@ class LlmQueue(r.BaseJobExecutor):
     @op("Stellt einen Prompt in die Queue (queue_prompts). on_done: Job, der ausgeführt wird, wenn der Prompt "
         "verarbeitet wurde, '#response' wird darin durch die Antwort ersetzt. llm: type des LLM-Runners",
         result={'success': 'bool', 'guid': 'str'})
-    def prompt(self, prompt: str, llm: str, guid: str = None, on_done: dict = None):
+    def prompt(self, prompt: str, llm: str, guid: str = None, on_done: dict = None, tags=None, hold: bool = False):
+        """
+        :param tags: Liste oder Komma-getrennt, z.B. ['mailextract', 'order']
+        :param hold: nicht sofort verarbeiten, sondern erst mit run_batch(tag) (nur mit tags)
+        """
         if not llm:
             return self.fail('llm fehlt: type des LLM-Runners angeben')
+        tags = parse_tags(tags)
+        hold = str(hold).strip().lower() in ('1', 'true', 'yes', 'on') if isinstance(hold, str) else bool(hold)
+        if hold and not tags:
+            return self.fail('hold braucht tags, sonst kann run_batch den Prompt nicht finden')
         table = self.prompts_table()
         guid = guid or u.guid()
         if table.get(guid) is not None:
             return self.fail('guid existiert bereits: ' + guid, guid=guid)
-        table.insert({'guid': guid, 'llm': llm, 'prompt': prompt, 'on_done': on_done or None,
-                      'status': 'queued', 'created': time.time()})
-        self.wakeup.set()
-        return self.success('queued', guid=guid)
+        status = 'held' if hold else 'queued'
+        table.insert({'guid': guid, 'llm': llm, 'prompt': prompt, 'on_done': on_done or None, 'tags': tags or None,
+                      'status': status, 'created': time.time()})
+        if not hold:
+            self.wakeup.set()
+        return self.success(status, guid=guid, status=status)
+
+    @op("Verarbeitet alle wartenden Prompts (held und queued) mit dem Tag auf einmal, je LLM-Runner direkt "
+        "nacheinander. background=1: im Hintergrund, Ergebnis per Event batch_done",
+        result={'success': 'bool', 'count': 'int', 'done': 'int', 'errors': 'int'})
+    def run_batch(self, tag: str, llm: str = '', limit: int = 0, background: bool = False):
+        if not tag:
+            return self.fail('tag fehlt')
+        table = self.prompts_table()
+        with self.table_lock:
+            if self.batches.get(tag, {}).get('running'):
+                return self.fail('Stapel läuft schon: ' + tag, count=0, done=0, errors=0)
+            rows = table.rows(llm or None, ('held', 'queued'), limit=int(limit or 0), oldest_first=True, tag=tag)
+            # Reihenfolge: nach LLM gruppiert, darin älteste zuerst
+            rows.sort(key=lambda row: (str(row.get('llm') or ''), row.get('created') or 0))
+            self.batches[tag] = {'running': True, 'count': len(rows), 'done': 0, 'errors': 0, 'started': time.time()}
+        if background:
+            threading.Thread(target=self._run_batch, args=(tag, rows), daemon=True,
+                             name=f'{self.type}-batch-{tag}').start()
+            return self.success('gestartet', count=len(rows), done=0, errors=0)
+        state = self._run_batch(tag, rows)
+        return self.success('ok', count=state['count'], done=state['done'], errors=state['errors'])
+
+    def _run_batch(self, tag: str, rows: list) -> dict:
+        state = self.batches[tag]
+        try:
+            with self.process_lock:
+                for row in rows:
+                    current = self.table.get(row['guid'])
+                    if current is None or current.get('status') not in ('held', 'queued'):
+                        continue  # inzwischen gelöscht oder verarbeitet
+                    self.process(current)
+                    if (self.table.get(row['guid']) or {}).get('status') == 'done':
+                        state['done'] += 1
+                    else:
+                        state['errors'] += 1
+        finally:
+            state['running'] = False
+            state['finished'] = time.time()
+        self.emit_event('batch_done', tag=tag, count=state['count'], done=state['done'], errors=state['errors'])
+        return state
+
+    @op("Anzahl wartender Prompts (held, queued) je Tag", result={'success': 'bool', 'tags': 'dict'})
+    def batch_tags(self):
+        return self.success('ok', tags=self.prompts_table().tag_counts())
 
     @op("Status und Antwort eines Prompts", result={'success': 'bool', 'prompt': 'dict'})
     def get(self, guid: str):
         row = self.prompts_table().get(guid)
         return self.success('ok', prompt=row) if row else self.fail('unbekannte guid')
 
-    @op("Prompts aus queue_prompts, status: Komma-getrennt (z.B. queued,running), leer: alle",
+    @op("Prompts aus queue_prompts, status: Komma-getrennt (z.B. held,queued,running), leer: alle, tag: nur mit Tag",
         result={'success': 'bool', 'prompts': 'list'})
-    def list_prompts(self, status: str = '', llm: str = '', limit: int = 100):
+    def list_prompts(self, status: str = '', llm: str = '', limit: int = 100, tag: str = ''):
         st = tuple(s.strip() for s in status.split(',') if s.strip()) or None
-        return self.success('ok', prompts=self.prompts_table().rows(llm or None, st, limit))
+        return self.success('ok', prompts=self.prompts_table().rows(llm or None, st, limit, tag=tag or None))
 
     @op("Prompt aus der Queue entfernen", result={'success': 'bool'})
     def delete(self, guid: str):
@@ -1541,6 +1538,15 @@ class LlmQueue(r.BaseJobExecutor):
         p.prop("Gespeichert", f'ja ({QueuePromptTable.TABLE})' if table.persistent else
                'nein, keine nweb-Persistence, nur bis zum Neustart')
         p.prop("Verarbeitet", str(self.processed))
+        counts = table.tag_counts()
+        if counts:
+            p.h3("Wartende Stapel")
+            for tag, n in sorted(counts.items()):
+                state = self.batches.get(tag, {})
+                info = f" (läuft: {state['done'] + state['errors']}/{state['count']})" if state.get('running') else ''
+                p.div(f"{esc(tag)}: {n} Prompts{info} " +
+                      self.action_btn_parametric("Jetzt verarbeiten",
+                                                 {'type': self.type, 'op': 'run_batch', 'tag': tag, 'background': 1}))
         p.h3("Ausstehende Prompts")
         part_prompt_table(p, table.rows(status=QueuePromptTable.OPEN, oldest_first=True))
         p.h3("Zuletzt verarbeitet")
@@ -1551,7 +1557,7 @@ def part_prompt_table(p: b.Page, rows: list):
     if not rows:
         p.div('Keine Prompts.')
         return
-    html = '<table class="table"><tr><th>Erstellt</th><th>LLM</th><th>Status</th><th>Prompt</th>' \
+    html = '<table class="table"><tr><th>Erstellt</th><th>LLM</th><th>Status</th><th>Tags</th><th>Prompt</th>' \
            '<th>on_done</th><th>Antwort / Meldung</th></tr>'
     for row in rows:
         created = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row['created'])) if row.get('created') else ''
@@ -1559,7 +1565,8 @@ def part_prompt_table(p: b.Page, rows: list):
         info = str(row.get('response') or row.get('message') or '')
         on_done = json.dumps(row['on_done']) if row.get('on_done') else ''
         html += f'<tr title="{esc(str(row["guid"]))}"><td>{esc(created)}</td><td>{esc(str(row.get("llm") or ""))}</td>' \
-                f'<td>{esc(str(row.get("status") or ""))}</td><td>{esc(prompt[:300])}</td>' \
+                f'<td>{esc(str(row.get("status") or ""))}</td><td>{esc(", ".join(row.get("tags") or []))}</td>' \
+                f'<td>{esc(prompt[:300])}</td>' \
                 f'<td><code>{esc(on_done[:200])}</code></td><td>{esc(info[:300])}</td></tr>'
     p(html + '</table>')
 

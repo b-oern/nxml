@@ -7,6 +7,7 @@ import html
 import re
 import glob
 import base64
+import mimetypes
 import requests
 import random
 import os.path
@@ -96,10 +97,12 @@ class ComfyUi(r.BaseJobExecutor):
             .set_description("Speichert einen Workflow (Base64-JSON) in workflow_dir")
         f.r_success(workflow='str')
         f.r_fail()
-        f = self.define_sig(d.PStr('op', 'instance_run'), d.Param('workflow'), d.PInt('count', 1))\
+        f = self.define_sig(d.PStr('op', 'instance_run'), d.Param('workflow'), d.PInt('count', 1),
+                            d.PStr('wait_finish', '0'))\
             .set_description("Startet einen in der Instanz gespeicherten Workflow (UI-Format), "
-                             "Parameter als p:<Node-Id>:<Name>, zufällige Seeds als r:<Node-Id>:<Name>")
-        f.r_success(prompt_ids='list', warnings='list')
+                             "Parameter als p:<Node-Id>:<Name>, zufällige Seeds als r:<Node-Id>:<Name>; "
+                             "wait_finish=1 wartet auf das Ende und liefert die Bilder als Base64 (images)")
+        f.r_success(prompt_ids='list', warnings='list', prompts='dict', images='list')
         f.r_fail()
         f = self.define_sig(d.PStr('op', 'instance_list'))\
             .set_description("In der Instanz gespeicherte Workflows (user/default/workflows)")
@@ -540,7 +543,59 @@ class ComfyUi(r.BaseJobExecutor):
                 prompt_ids.append(response.json().get('prompt_id'))
         except (OSError, ValueError, requests.RequestException) as e:
             return self.fail(str(e))
+        if to_type(data.get('wait_finish', False), 'BOOLEAN'):
+            return self.wait_for_prompts(prompt_ids, warnings)
         return self.success(f"{len(prompt_ids)} Prompt(s) gestartet", prompt_ids=prompt_ids, warnings=warnings)
+
+    FINISH_INTERVAL = 12      # Sekunden zwischen den Abfragen bei wait_finish
+    FINISH_TIMEOUT = 3600     # Sekunden, die instance_run mit wait_finish hoechstens wartet
+
+    def wait_for_prompts(self, prompt_ids: list, warnings: list = ()) -> dict:
+        """
+         Wartet (Abfrage alle FINISH_INTERVAL Sekunden), bis alle Prompts fertig sind, und liefert die Bilder als Base64
+
+         :return: success, prompt_ids, prompts (Status je Prompt), images: [{prompt_id, filename, mime, data}]
+        """
+        deadline = time.time() + self.FINISH_TIMEOUT
+        states = {}
+        try:
+            while True:
+                queue = self.queue()
+                states = {pid: self.prompt_status(pid, queue) for pid in prompt_ids}
+                if all(s['status'] in ('done', 'error', 'unknown') for s in states.values()):
+                    break
+                if time.time() >= deadline:
+                    return self.fail(f"Nicht fertig nach {self.FINISH_TIMEOUT} s", prompt_ids=prompt_ids,
+                                     prompts=states)
+                time.sleep(self.FINISH_INTERVAL)
+            images = []
+            for pid, state in states.items():
+                if state['status'] == 'done':
+                    images.extend(self.prompt_images(pid))
+        except (OSError, ValueError, requests.RequestException) as e:
+            return self.fail(str(e), prompt_ids=prompt_ids, prompts=states)
+        errors = [f"{pid}: {s['message'] or s['status']}" for pid, s in states.items() if s['status'] != 'done']
+        res = dict(prompt_ids=prompt_ids, prompts=states, images=images, warnings=list(warnings))
+        if errors:
+            return self.fail('; '.join(errors), **res)
+        return self.success(f"{len(prompt_ids)} Prompt(s) fertig, {len(images)} Bild(er)", **res)
+
+    def prompt_images(self, prompt_id: str) -> list:
+        """ Bilder (und GIFs/Videos) aus der History eines Prompts, ueber /view geladen, als Base64 """
+        history = self.history_job(prompt_id).get(prompt_id) or {}
+        res = []
+        for out in history.get('outputs', {}).values():
+            for img in out.get('images', []) + out.get('gifs', []):
+                if not isinstance(img, dict) or not img.get('filename'):
+                    continue
+                response = requests.get(self.server_url + '/view', timeout=60, params={
+                    'filename': img['filename'], 'subfolder': img.get('subfolder', ''),
+                    'type': img.get('type', 'output')})
+                response.raise_for_status()
+                mime = response.headers.get('Content-Type') or mimetypes.guess_type(img['filename'])[0] or ''
+                res.append({'prompt_id': prompt_id, 'filename': img['filename'], 'mime': mime.split(';')[0],
+                            'data': base64.b64encode(response.content).decode('ascii')})
+        return res
 
     def execute_instance_list(self, data={}):
         try:
@@ -974,18 +1029,37 @@ class ComfyUi(r.BaseJobExecutor):
         for msg in warnings:
             p.alert_warn(html.escape(msg))
         self.part_params_form(p, self, conv.params(), dict(type=self.type, op='instance_run', workflow=path),
-                              "Workflow mit diesen Parametern in die Queue der ComfyUI-Instanz stellen")
+                              "Workflow mit diesen Parametern in die Queue der ComfyUI-Instanz stellen",
+                              self.JS_SHOW_IMAGES, wait_finish=True)
+        p.div('', id='result_images', style='display: flex; flex-wrap: wrap; gap: 8px;')
         p.pre('', id='result')
+
+    # on_success fuer instance_run mit wait_finish: Bilder aus r.images unter dem Formular anzeigen
+    JS_SHOW_IMAGES = """function(r) {
+        var box = document.getElementById('result_images');
+        if (!box || !r || !r.images) return;
+        box.innerHTML = '';
+        r.images.forEach(function(img) {
+            var src = 'data:' + (img.mime || 'image/png') + ';base64,' + img.data;
+            var el = document.createElement((img.mime || '').indexOf('video/') === 0 ? 'video' : 'img');
+            el.src = src; el.title = img.filename; el.style.maxWidth = '100%'; el.style.maxHeight = '512px';
+            if (el.tagName === 'VIDEO') { el.controls = true; }
+            box.appendChild(el);
+        });
+    }"""
 
     @classmethod
     def part_params_form(cls, p: base.Page, runner: r.BaseJobExecutor, prms: list, job: dict, run_hint: str,
-                         on_success='null'):
+                         on_success='null', wait_finish=False):
         """
          Formular fuer die Parameter aus UiWorkflow.params() mit Anzahl und Run-Button (auch fuer ComfyRemote)
 
          :param job: Basis des Jobs, die Parameter kommen als p:<Node-Id>:<Name> bzw. r:... (zufaelliger Seed) dazu
+         :param wait_finish: Haken "Wait for finish" anbieten (instance_run wartet und liefert die Bilder als Base64)
         """
         job = dict(job, count='#count')
+        if wait_finish:
+            job['wait_finish'] = '#wait_finish'
         groups = {}
         for prm in prms:
             groups.setdefault(prm['group'], []).append(prm)
@@ -1002,6 +1076,10 @@ class ComfyUi(r.BaseJobExecutor):
         with p.section("Ausführen"):
             p.form_input('count', "Anzahl", id='count', type='number', value='1', min='1',
                          hint="So oft wird der Workflow in die Queue der Instanz gestellt")
+            if wait_finish:
+                p.form_elem('<label title="Wartet, bis alle Prompts fertig sind (Abfrage alle '
+                            f'{cls.FINISH_INTERVAL} s), und liefert die Bilder als Base64 in der Antwort">'
+                            '<input type="checkbox" id="wait_finish"> Wait for finish</label>', "")
             p.form_elem(runner.action_btn_parametric("Run", job, on_success, hint=run_hint))
 
     def part_workflow_table(self, p: base.Page):

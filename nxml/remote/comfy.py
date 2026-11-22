@@ -512,7 +512,9 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
         for msg in info.get('warnings') or []:
             p.alert_warn(html.escape(str(msg)))
         self.part_params_form(p, self, info.get('params') or [], dict(type=self.type, op='instance_run', workflow=path),
-                              f"Workflow in die Queue der ComfyUI-Instanz auf {self.target} stellen")
+                              f"Workflow in die Queue der ComfyUI-Instanz auf {self.target} stellen",
+                              self.JS_SHOW_IMAGES, wait_finish=True)
+        p.div('', id='result_images', style='display: flex; flex-wrap: wrap; gap: 8px;')
         p.pre('', id='result')
 
     def part_instance_assets(self, p: base.Page, params={}):
