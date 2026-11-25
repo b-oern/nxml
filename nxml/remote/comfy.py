@@ -78,7 +78,7 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
     CACHE_INSTANCE_PARAMS = 'instance_params:'
 
     def __init__(self, type='remote_comfy', target='', store='mongodb', remote_type='comfyui', wait=300,
-                 page_wait=15, cache_ttl=0, poll_interval=10, timeout=6000, keep=100):
+                 page_wait=15, cache_ttl=0, poll_interval=20, timeout=9000, keep=100):
         """
         :param target: Name der Ziel-Instanz (nwebclient.nx.get_name() dort, i.d.R. der Hostname)
         :param store: type des Job-Speicher-Runners
@@ -161,7 +161,9 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
             self.results.popitem(last=False)
         self.done[key] = dict(key=key, label=meta.get('label') or '', cache_key=meta.get('cache_key') or '',
                               sent=meta.get('ts'), done=time.time(), success=bool(result.get('success', False)),
-                              message=str(result.get('message', '')))
+                              message=str(result.get('message', '')),
+                              images=[str(img.get('filename', f'bild{i}')) for i, img in
+                                      enumerate(result.get('images') or []) if isinstance(img, dict)])
         while len(self.done) > self.keep:
             self.done.popitem(last=False)
         event = self.events.get(key)
@@ -370,6 +372,13 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
 
     def execute(self, data):
         op = data.get('op')
+        if op == 'instance_run' and is_true(data.get('wait_finish', 0)):
+            # Request Image for Download: nicht auf das Ende warten, Bilder später unter Done herunterladen
+            res = self.send(self.job(data), run_async=True)
+            if res.get('success'):
+                res.update(message='Angefordert, die Bilder stehen nach dem Lauf unter Done zum Download',
+                           link=self.link(self.part_pending))
+            return res
         if op in self.OPS or (op is None and 'prompt' in data):
             return self.send(self.job(data), data.get('wait'), is_true(data.get('async', 0)),
                              invalidate=self.invalidates(data))
@@ -580,11 +589,37 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
                     value=lambda e: '<span class="badge ok">ok</span>' if e['success']
                     else '<span class="badge warn">Fehler</span>'),
                 col('message', "Meldung", value=lambda e: e['message'][:120]),
+                col('download', "Download", html=True, sortable=False, value=self.col_download),
                 col('actions', '', html=True, sortable=False,
                     value=lambda e: self.action_btn(dict(type=self.type, op='remote_result', guid=e['key'],
                                                          title="Ergebnis"), hint="Ergebnis der Ziel-Instanz anzeigen")),
             ], params, search=True, empty="Noch keine erledigten Jobs.")
         p.pre('', id='result')
+
+    def col_download(self, e) -> str:
+        return ' '.join(w.a(html.escape(name), self.dispatcher_link(self.page_image, key=e['key'], i=i),
+                            "Bild der Ziel-Instanz herunterladen")
+                        for i, name in enumerate(e.get('images') or [])) or '-'
+
+    def page_image(self, params={}):
+        """ Bild i aus dem Ergebnis key (instance_run mit wait_finish) herunterladen """
+        import base64
+        import mimetypes
+        from flask import Response
+        key = str(params.get('key', ''))
+        try:
+            i = int(params.get('i', 0))
+        except ValueError:
+            i = -1
+        with self.remote_lock:
+            images = (self.results.get(key) or {}).get('images') or []
+        if not 0 <= i < len(images) or not isinstance(images[i], dict):
+            return Response('Bild nicht (mehr) vorhanden', status=404, mimetype='text/plain')
+        img = images[i]
+        name = str(img.get('filename') or f'bild{i}').rsplit('/', 1)[-1].replace('"', '')
+        mime = img.get('mime') or mimetypes.guess_type(name)[0] or 'application/octet-stream'
+        return Response(base64.b64decode(img.get('data') or ''), mimetype=mime,
+                        headers={'Content-Disposition': f'attachment; filename="{name}"'})
 
     def part_workflow_table(self, p: base.Page):
         super().part_workflow_table(p)

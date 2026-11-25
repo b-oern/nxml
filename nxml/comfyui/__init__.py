@@ -1055,7 +1055,8 @@ class ComfyUi(r.BaseJobExecutor):
          Formular fuer die Parameter aus UiWorkflow.params() mit Anzahl und Run-Button (auch fuer ComfyRemote)
 
          :param job: Basis des Jobs, die Parameter kommen als p:<Node-Id>:<Name> bzw. r:... (zufaelliger Seed) dazu
-         :param wait_finish: Haken "Wait for finish" anbieten (instance_run wartet und liefert die Bilder als Base64)
+         :param wait_finish: Haken "Request Image for Download" anbieten (instance_run mit wait_finish=1 wartet und
+                             liefert die Bilder als Base64)
         """
         job = dict(job, count='#count')
         if wait_finish:
@@ -1079,7 +1080,7 @@ class ComfyUi(r.BaseJobExecutor):
             if wait_finish:
                 p.form_elem('<label title="Wartet, bis alle Prompts fertig sind (Abfrage alle '
                             f'{cls.FINISH_INTERVAL} s), und liefert die Bilder als Base64 in der Antwort">'
-                            '<input type="checkbox" id="wait_finish"> Wait for finish</label>', "")
+                            '<input type="checkbox" id="wait_finish"> Request Image for Download</label>', "")
             p.form_elem(runner.action_btn_parametric("Run", job, on_success, hint=run_hint))
 
     def part_workflow_table(self, p: base.Page):
