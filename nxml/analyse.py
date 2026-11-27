@@ -263,6 +263,140 @@ class BertEmbeddings(HuggingRunner, runner.BaseJobExecutor):
         return data
 
 
+class TextEmbeddings(HuggingRunner, runner.BaseJobExecutor):
+    """
+    Mehrsprachige Text-Embeddings (Deutsch + Englisch) mit sentence-transformers, z.B. für nxml.rag (embedder=text_embed).
+
+    Standard ist BAAI/bge-m3: 100+ Sprachen, sehr gut für DE und EN, 1024 Dimensionen, bis 8192 Token je Text,
+    MIT-Lizenz, ~2,3 GB (auf der GPU in fp16 ~1,2 GB VRAM). Weitere Modelle in MODELS, z.B. kleiner und schneller
+    intfloat/multilingual-e5-base. Modelle wie E5 brauchen Präfixe für Anfrage und Dokument, die über
+    input_type (query oder passage) automatisch gesetzt werden.
+
+        {"type": "text_embed", "op": "embed", "input": ["Text 1", "Text 2"], "input_type": "passage"}
+        {"type": "text_embed", "text": "Ein Text"}      -> embedding (wie BertEmbeddings)
+
+    pip install sentence-transformers (dazu torch, für CUDA passend zur Grafikkarte installieren)
+    """
+    TAGS = ['embedding']
+    MODULES = ['sentence-transformers']
+    model_name = 'BAAI/bge-m3'
+    HF_MODEL_ATTRS = ('st_model',)
+
+    # Repo-ID -> dims, max. Token, Präfixe für query/passage, trust_remote_code
+    MODELS = {
+        'BAAI/bge-m3': dict(dims=1024, max_tokens=8192, query='', passage='',
+                            info='Empfehlung: beste Qualität DE+EN, lange Texte'),
+        'intfloat/multilingual-e5-large': dict(dims=1024, max_tokens=512, query='query: ', passage='passage: ',
+                                               info='sehr gut, 512 Token'),
+        'intfloat/multilingual-e5-base': dict(dims=768, max_tokens=512, query='query: ', passage='passage: ',
+                                              info='guter Kompromiss, ~1,1 GB'),
+        'intfloat/multilingual-e5-small': dict(dims=384, max_tokens=512, query='query: ', passage='passage: ',
+                                               info='klein und schnell, auch auf CPU'),
+        'jinaai/jina-embeddings-v2-base-de': dict(dims=768, max_tokens=8192, query='', passage='',
+                                                  trust_remote_code=True,
+                                                  info='zweisprachig DE/EN, lange Texte, führt Code aus dem Repo aus'),
+        'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2': dict(
+            dims=384, max_tokens=128, query='', passage='', info='sehr klein, nur kurze Texte'),
+    }
+
+    def __init__(self, type='text_embed', model_name=None, device_mode='auto', batch_size=16, max_seq_length=0,
+                 fp16=True):
+        """
+        :param model_name: Repo-ID auf dem Hugging Face Hub, Standard BAAI/bge-m3 (siehe MODELS)
+        :param batch_size: Texte je Durchlauf auf GPU/CPU
+        :param max_seq_length: Token je Text begrenzen (0: Modellstandard), weniger spart Speicher und Zeit
+        :param fp16: auf der GPU in halber Genauigkeit rechnen
+        """
+        runner.BaseJobExecutor.__init__(self, type)
+        self.hf_init(model_name, device_mode)
+        self.batch_size = int(batch_size)
+        self.max_seq_length = int(max_seq_length)
+        self.fp16 = str(fp16).lower() not in ('0', 'false', 'no', '')
+        self.define_vars('batch_size', 'max_seq_length', 'fp16')
+        self.define_sig(d.Param('text')).set_description("Embedding eines Textes (Dokument)")\
+            .r(embedding='list', embedding_model='str', success='bool')
+
+    @property
+    def model_cfg(self) -> dict:
+        return self.MODELS.get(self.model_name, {})
+
+    def load_model(self):
+        from sentence_transformers import SentenceTransformer
+        cfg = self.model_cfg
+        model = SentenceTransformer(self.model_name, device=self.device,
+                                    trust_remote_code=bool(cfg.get('trust_remote_code', False)))
+        if self.fp16 and str(self.device).startswith('cuda'):
+            model = model.half()
+        if self.max_seq_length > 0:
+            model.max_seq_length = self.max_seq_length
+        self.st_model = model
+
+    def prefix(self, input_type: str) -> str:
+        return self.model_cfg.get('query' if input_type == 'query' else 'passage', '')
+
+    def embed(self, texts: list, input_type: str = 'passage') -> list:
+        """ :return: auf Länge 1 normierte Vektoren als Listen """
+        if not texts:
+            return []
+        self.load()
+        prefix = self.prefix(input_type)
+        vectors = self.st_model.encode([prefix + str(t) for t in texts], batch_size=self.batch_size,
+                                       normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
+        return vectors.astype(float).tolist()
+
+    @staticmethod
+    def as_list(value) -> list:
+        if isinstance(value, str):
+            s = value.strip()
+            if s.startswith('['):
+                try:
+                    return list(json.loads(s))
+                except ValueError:
+                    pass
+            return [value]
+        return list(value or [])
+
+    @runner.op("Embeddings mehrerer Texte, input_type: passage (Dokumente) oder query (Suchanfrage)",
+               result={'success': 'bool', 'embeddings': 'list', 'embedding': 'list', 'dims': 'int', 'model': 'str'},
+               name='embed')
+    def embed_op(self, input, input_type: str = 'passage', model: str = ''):
+        """ model wird ignoriert (Kompatibilität mit LMStudio), das Modell ist model_name """
+        try:
+            embeddings = self.embed(self.as_list(input), input_type)
+            return self.success('ok', embeddings=embeddings, embedding=embeddings[0] if embeddings else [],
+                                dims=len(embeddings[0]) if embeddings else 0, model=self.model_name)
+        except Exception as e:
+            return self.fail(str(e), embeddings=[])
+
+    @runner.op("Unterstützte Modelle mit Dimensionen und Hinweisen", result={'success': 'bool', 'models': 'list'})
+    def models(self):
+        return self.success('ok', models=[dict(model=k, **{x: y for x, y in v.items() if x not in ('query', 'passage')})
+                                          for k, v in self.MODELS.items()], current=self.model_name)
+
+    def execute(self, data):
+        if 'text' in data and 'op' not in data:
+            try:
+                embedding = self.embed([data['text']], data.get('input_type', 'passage'))[0]
+                return self.success('ok', embedding=embedding, embedding_model=self.model_name)
+            except Exception as e:
+                return self.fail(str(e))
+        return super().execute(data)
+
+    def part_index(self, p: b.Page, params={}):
+        if hasattr(self, 'part_hf_nav'):
+            self.part_hf_nav(p, 'index')
+        p.prop("Modell", self.model_name)
+        cfg = self.model_cfg
+        if cfg:
+            p.prop("Dimensionen", cfg.get('dims'))
+            p.prop("Max. Token", self.max_seq_length or cfg.get('max_tokens'))
+            p.prop("Hinweis", cfg.get('info', ''))
+        p.prop("Geladen", 'ja' if self.hf_loaded else 'nein')
+        p('<textarea id="te_text" rows="3" style="width:100%" placeholder="Text"></textarea>')
+        p(self.action_btn_parametric("Embedding berechnen", {'type': self.type, 'op': 'embed', 'input': '#te_text'}))
+        p.pre('', id='result')
+
+
 class NsfwDetector(runner.ImageExecutor):
     """
     apt update && apt install -y python-is-python3 python3-pip git

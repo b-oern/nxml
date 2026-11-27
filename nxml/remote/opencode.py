@@ -22,6 +22,10 @@ wird zwischengespeichert, im Speicher und, falls vorhanden, in der nweb-Persiste
         {"type": "ropencode", "op": "remote_result", "guid": "..."}     Ergebnis abholen (pending solange keins da ist)
         {"type": "ropencode", "op": "remote_state"}                     Statuszeile, ausstehende Jobs, Fehler, Cache
         {"type": "ropencode", "op": "cache_clear"}                      Cache (für target) leeren
+        {"type": "ropencode", "op": "list_issues", "refresh": 1}        gemerkte Abfrage ignorieren
+
+    Lesende Ops (QUERY_OPS) merkt er sich im RAM: eine gleiche, noch ausstehende Abfrage wird nicht erneut gesendet
+    (gleiche remote_guid), ihr Ergebnis wird query_ttl Sekunden wiederverwendet. Schreibende Ops verwerfen das.
 
     Bei do_issue ist wait der Parameter von do_issue (auf das Ende des Issues warten), die Antwort der Ziel-Instanz
     wird dann bis zu timeout Sekunden abgewartet.
@@ -37,6 +41,7 @@ import time
 from collections import OrderedDict
 
 from nwebclient import runner as r
+from nwebclient import base as b
 from nwebclient import util as u
 from nwebclient import dev as d
 
@@ -60,13 +65,18 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
     OPS = ['do_issue', 'status', 'server_start', 'server_stop', 'list_providers', 'set_model', 'list_issues',
            'session_messages', 'pairing', 'list_sessions', 'abort', 'ask', 'list_repos', 'select_repo']
 
+    # lesende Ops: gleiche Abfragen werden im RAM gemerkt und nicht erneut gesendet (siehe query_ttl)
+    QUERY_OPS = ['status', 'list_issues', 'session_messages', 'list_sessions', 'list_repos']
+
     # Felder, die nur lokal gelten und nicht mitgeschickt werden (wait außer bei do_issue)
     LOCAL_KEYS = ['type', 'job_type', 'async', 'wait', 'refresh']
 
     CACHE_PROVIDERS = 'providers'
 
+    PAGES = OpenCodeAgent.PAGES + [('pending', 'Pending')]
+
     def __init__(self, type='remote_opencode', target='', store='mongodb', remote_type='opencode', wait=600,
-                 cache_ttl=0, poll_interval=10, timeout=6000, keep=100):
+                 cache_ttl=0, poll_interval=60, timeout=12000, keep=100, query_ttl=300):
         """
         :param target: Name der Ziel-Instanz (nwebclient.nx.get_name() dort, i.d.R. der Hostname)
         :param store: type des Job-Speicher-Runners
@@ -76,12 +86,16 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
         :param poll_interval: Sekunden zwischen den Abfragen der Ergebnisse
         :param timeout: Sekunden, nach denen eine Antwort verworfen wird
         :param keep: Anzahl abholbereiter Ergebnisse, ältere werden verworfen
+        :param query_ttl: Sekunden, die das Ergebnis einer lesenden Op (QUERY_OPS) wiederverwendet wird, 0: unbegrenzt;
+                          eine gleiche, noch ausstehende Abfrage wird nie erneut gesendet
         """
         OpenCodeAgent.__init__(self, start=False, type=type, args={})
         self.init_remote(target, store, remote_type, poll_interval, timeout)
         self.wait = float(wait)
         self.cache_ttl = float(cache_ttl)
         self.keep = int(keep)
+        self.query_ttl = float(query_ttl)
+        self.queries = {}              # Abfrage (JSON) -> {key, ts}, ts: Zeitpunkt der Antwort, None: ausstehend
         self.results = OrderedDict()   # key -> Ergebnis der Ziel-Instanz
         self.events = {}               # key -> Event für wartende Jobs
         self.cache = {}                # Cache-Schlüssel -> {ts, result}
@@ -89,13 +103,16 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
         # gelten auf der Ziel-Instanz (set_model, select_repo), nicht lokal
         self.var_names = [v for v in self.var_names if v not in ('project_path', 'url', 'provider', 'model',
                                                                  'remote', 'repo')]
-        self.define_vars('target', 'store', 'remote_type', 'wait', 'cache_ttl')
+        self.define_vars('target', 'store', 'remote_type', 'wait', 'cache_ttl', 'query_ttl')
         self.define_sig(d.PStr('op', 'remote_result'), d.PStr('guid'))\
             .set_description("Ergebnis eines mit async=1 eingestellten Jobs, pending solange keins da ist")\
             .r(success='bool', pending='bool', result='dict')
         self.define_sig(d.PStr('op', 'remote_state'))\
             .set_description("Statuszeile (target, ausstehende Jobs, Fehler) und Cache-Einträge")\
             .r(success='bool', status='str', pending='int', error='str', cache='list')
+        self.define_sig(d.PStr('op', 'remote_pending'))\
+            .set_description("Jobs, die auf die Antwort der Ziel-Instanz warten")\
+            .r(success='bool', jobs='list', target='str', error='str')
         self.define_sig(d.PStr('op', 'cache_clear'))\
             .set_description("Cache (Providerliste) für target leeren").r_success()
 
@@ -117,10 +134,16 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
                 self.cache_put(meta['cache_key'], result)
             if meta.get('set_model'):
                 self.cache_set_model(**meta['set_model'])
+        query = self.queries.get(meta.get('query'))
+        if query is not None and query['key'] == key:
+            if result.get('success', False):
+                query['ts'] = time.time()
+            else:
+                self.queries.pop(meta['query'], None)  # Fehler nicht merken, der nächste Aufruf fragt neu
         self.results[key] = result
         while len(self.results) > self.keep:
             self.results.popitem(last=False)
-        event = self.events.get(key)
+        event = self.events.pop(key, None)
         if event is not None:
             event.set()
 
@@ -202,33 +225,71 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
         if event is None:
             return not self.is_pending(key)
         deadline = time.time() + wait
-        try:
-            while not event.wait(min(1.0, max(0.0, deadline - time.time()))):
-                if not self.is_pending(key):
-                    return True
-                if time.time() >= deadline:
-                    return False
-            return True
-        finally:
-            self.events.pop(key, None)
+        while not event.wait(min(1.0, max(0.0, deadline - time.time()))):
+            if not self.is_pending(key):
+                return True
+            if time.time() >= deadline:
+                return False
+        return True
 
     def take_result(self, key):
-        """ :return: Ergebnis der Ziel-Instanz oder None """
+        """ :return: Ergebnis der Ziel-Instanz oder None (bleibt abholbar, mehrere Seiten können dieselbe guid haben) """
         with self.remote_lock:
-            self.events.pop(key, None)
-            return self.results.pop(key, None)
+            return self.results.get(key)
 
-    def send(self, job: dict, wait=None, run_async=False, **meta):
+    def query_key(self, sig):
+        """ unter remote_lock: guid einer gleichen ausstehenden bzw. noch gültigen beantworteten Abfrage oder None """
+        query = self.queries.get(sig)
+        if query is None:
+            return None
+        key = query['key']
+        if query['ts'] is None:
+            if key in self.events or any(m.get('key') == key for m in self.remote_pending.values()):
+                return key
+        elif key in self.results and (self.query_ttl <= 0 or time.time() - query['ts'] <= self.query_ttl):
+            return key
+        self.queries.pop(sig, None)
+        return None
+
+    def send_query(self, job: dict, wait=None, run_async=False, refresh=False):
+        """ lesende Op: eine gleiche Abfrage nicht erneut senden, sondern deren guid bzw. Ergebnis verwenden """
+        sig = json.dumps(job, sort_keys=True, default=str)
+        with self.remote_lock:
+            key = None if refresh else self.query_key(sig)
+            if key is None:
+                key = u.guid()
+                self.queries[sig] = dict(key=key, ts=None)
+                new = True
+            else:
+                new = False
+        if new:
+            return self.send(job, wait, run_async, key=key, query=sig)
+        return self.answer(key, wait, run_async)
+
+    def send(self, job: dict, wait=None, run_async=False, key=None, **meta):
         """ Job an die Ziel-Instanz, run_async: nur einstellen, sonst bis zu wait Sekunden auf die Antwort warten """
-        key = u.guid()
-        if not run_async:
+        key = key or u.guid()
+        with self.remote_lock:
+            # Events von Jobs, die nicht mehr ausstehen (verworfen), aufräumen
+            pending = {m.get('key') for m in self.remote_pending.values()}
+            for k in [k for k in self.events if k not in pending]:
+                self.events.pop(k, None)
             self.events[key] = threading.Event()
         try:
             self.remote_send(job, key=key, **meta)
         except Exception as e:
-            self.events.pop(key, None)
+            with self.remote_lock:
+                self.events.pop(key, None)
+                self.queries.pop(meta.get('query'), None)
             self.set_remote_error(str(e))
             return self.fail(str(e))
+        return self.answer(key, wait, run_async)
+
+    def answer(self, key, wait=None, run_async=False):
+        """ Ergebnis zu key, run_async: nicht warten (pending mit remote_guid, solange keins da ist) """
+        result = self.take_result(key)
+        if result is not None:
+            return result
         if run_async:
             return self.success('Gesendet, wartet auf Antwort', pending=True, remote_guid=key)
         if not self.wait_for(key, self.wait if wait in (None, '') else float(wait)):
@@ -251,6 +312,10 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
         if op in self.OPS:
             run_async = is_true(data.get('async', 0))
             wait = self.timeout if op == 'do_issue' and is_true(data.get('wait', 0)) else data.get('wait')
+            if op in self.QUERY_OPS:
+                return self.send_query(self.job(data), wait, run_async, is_true(data.get('refresh', 0)))
+            with self.remote_lock:
+                self.queries = {}  # schreibende Op: gemerkte Abfragen sind danach veraltet
             meta = {}
             if op == 'set_model':
                 meta['set_model'] = {'provider': str(data.get('provider', '')), 'model': str(data.get('model', ''))}
@@ -289,12 +354,25 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
             status = self.remote_status()
             error = error or self.remote_error
             pending = len(self.remote_pending)
+            queries = len(self.queries)
             cache = [dict(key=k, ts=e['ts'], success=bool(e['result'].get('success')))
                      for k, e in sorted(self.cache.items())]
         if error and error not in status:
             status += ' – ' + error
         return self.success(status=status, pending=pending, error=error, target=self.target, store=self.store,
-                            cache=cache)
+                            cache=cache, queries=queries)
+
+    def execute_remote_pending(self, data={}):
+        """ wartende Jobs, älteste zuerst """
+        now = time.time()
+        with self.remote_lock:
+            pending = sorted(self.remote_pending.values(), key=lambda m: m.get('seq', 0))
+            jobs = [dict(guid=m.get('key') or m.get('guid'), label=m.get('label', ''), ts=m.get('ts'),
+                         age=int(now - (m.get('ts') or now)), query=bool(m.get('query')),
+                         cached=bool(m.get('cache_key')))
+                    for m in pending]
+            error = self.remote_error
+        return self.success(jobs=jobs, target=self.target, error=error, timeout=self.timeout)
 
     def set_target(self, value):
         """ setvar target: Cache und Ergebnisse gelten je Ziel """
@@ -303,7 +381,7 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
             if value == self.target:
                 return
             self.target = value
-            self.cache, self.remote_pending, self.results = {}, {}, OrderedDict()
+            self.cache, self.remote_pending, self.results, self.queries = {}, {}, OrderedDict(), {}
             self.remote_error = ''
             self.cache_loaded = False
 
@@ -312,3 +390,37 @@ class RemoteOpenCode(OpenCodeAgent, RemoteJobMixin):
     def opencode_cfg(self) -> dict:
         return {**super().opencode_cfg(), 'remote': True, 'target': self.target,
                 'poll_ms': int(max(1.0, min(self.poll_interval, 5.0)) * 1000)}
+
+    def part_pending(self, p: b.Page, params={}):
+        self.part_page(p, 'pending', PENDING_HTML, PENDING_JS)
+
+
+PENDING_HTML = """
+<h3>Wartende Jobs</h3>
+<div class="oc-row"><button id="oc-refresh">Aktualisieren</button> <span id="oc-count"></span></div>
+<div class="oc-msg" id="oc-msg"></div>
+<table class="oc-table" id="oc-pending"></table>
+"""
+
+PENDING_JS = r"""
+function age(s) {
+  return s < 60 ? s + ' s' : s < 3600 ? Math.floor(s / 60) + ' min ' + (s % 60) + ' s' : Math.floor(s / 3600) + ' h ' + Math.floor(s % 3600 / 60) + ' min';
+}
+function load() {
+  send({ op: 'remote_pending' }).then((r) => {
+    if (!r.success) { msg('oc-msg', r.message, true); return; }
+    msg('oc-msg', r.error, !!r.error);
+    $('oc-count').textContent = r.jobs.length + ' Job(s) warten auf ' + (r.target || '(kein target)');
+    $('oc-pending').innerHTML = '<tr><th>Job</th><th>Gesendet</th><th>Wartet seit</th><th>Art</th><th>guid</th></tr>'
+      + r.jobs.map((x) => '<tr><td><b>' + esc(x.label) + '</b></td>'
+        + '<td>' + (x.ts ? new Date(x.ts * 1000).toLocaleTimeString() : '') + '</td>'
+        + '<td>' + age(x.age) + (x.age > r.timeout * 0.8 ? ' <span class="oc-st err">läuft bald ab</span>' : '') + '</td>'
+        + '<td>' + (x.query ? 'Abfrage (gemerkt)' : x.cached ? 'Abfrage (Cache)' : 'Aktion') + '</td>'
+        + '<td><small><code>' + esc(x.guid) + '</code></small></td></tr>').join('')
+      + (r.jobs.length ? '' : '<tr><td colspan="5"><i>keine wartenden Jobs</i></td></tr>');
+  });
+}
+$('oc-refresh').onclick = load;
+load();
+setInterval(load, 5000);
+"""

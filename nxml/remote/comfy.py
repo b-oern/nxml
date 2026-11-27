@@ -42,10 +42,15 @@ from nwebclient import runner as r
 from nwebclient import base
 from nwebclient import util as u
 from nwebclient import dev as d
+from nwebclient import web as w
 
 from nxrunner.jobstore import RemoteJobMixin
 
 from nxml.comfyui import ComfyUi
+
+
+def fmt_ts(ts) -> str:
+    return time.strftime('%d.%m. %H:%M:%S', time.localtime(ts)) if isinstance(ts, (int, float)) else '-'
 
 
 def is_true(value) -> bool:
@@ -61,7 +66,7 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
 
     # Ops, die unverändert an den comfyui-Runner der Ziel-Instanz gehen (Jobs ohne op ebenso)
     OPS = ['rest', 'queue', 'queue_count', 'workflow', 'workflow_prepare', 'workflow_upload', 'q_c_prompt',
-           'prepare_workflow', 'queue_i4', 'template']
+           'prepare_workflow', 'queue_i4', 'template', 'instance_run', 'instance_status']
 
     # Felder, die nur lokal gelten und nicht mitgeschickt werden
     LOCAL_KEYS = ['type', 'job_type', 'async', 'wait', 'refresh']
@@ -69,9 +74,11 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
     CACHE_WORKFLOWS = 'workflows'
     CACHE_SERVER = 'server_info'
     CACHE_WORKFLOW = 'workflow:'
+    CACHE_INSTANCE = 'instance_workflows'
+    CACHE_INSTANCE_PARAMS = 'instance_params:'
 
     def __init__(self, type='remote_comfy', target='', store='mongodb', remote_type='comfyui', wait=300,
-                 page_wait=15, cache_ttl=0, poll_interval=10, timeout=6000, keep=100):
+                 page_wait=15, cache_ttl=0, poll_interval=20, timeout=9000, keep=100):
         """
         :param target: Name der Ziel-Instanz (nwebclient.nx.get_name() dort, i.d.R. der Hostname)
         :param store: type des Job-Speicher-Runners
@@ -92,6 +99,7 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
         self.cache_ttl = float(cache_ttl)
         self.keep = int(keep)
         self.results = OrderedDict()   # key -> Ergebnis der Ziel-Instanz
+        self.done = OrderedDict()      # key -> {key, label, sent, done, success, message} erledigter Jobs
         self.events = {}               # key -> Event für wartende Jobs
         self.cache = {}                # Cache-Schlüssel -> {ts, result}
         self.cache_loaded = False      # cache und offene Abrufe aus der nweb-Persistence geladen
@@ -151,6 +159,13 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
         self.results[key] = result
         while len(self.results) > self.keep:
             self.results.popitem(last=False)
+        self.done[key] = dict(key=key, label=meta.get('label') or '', cache_key=meta.get('cache_key') or '',
+                              sent=meta.get('ts'), done=time.time(), success=bool(result.get('success', False)),
+                              message=str(result.get('message', '')),
+                              images=[str(img.get('filename', f'bild{i}')) for i, img in
+                                      enumerate(result.get('images') or []) if isinstance(img, dict)])
+        while len(self.done) > self.keep:
+            self.done.popitem(last=False)
         event = self.events.get(key)
         if event is not None:
             event.set()
@@ -357,6 +372,13 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
 
     def execute(self, data):
         op = data.get('op')
+        if op == 'instance_run' and is_true(data.get('wait_finish', 0)):
+            # Request Image for Download: nicht auf das Ende warten, Bilder später unter Done herunterladen
+            res = self.send(self.job(data), run_async=True)
+            if res.get('success'):
+                res.update(message='Angefordert, die Bilder stehen nach dem Lauf unter Done zum Download',
+                           link=self.link(self.part_pending))
+            return res
         if op in self.OPS or (op is None and 'prompt' in data):
             return self.send(self.job(data), data.get('wait'), is_true(data.get('async', 0)),
                              invalidate=self.invalidates(data))
@@ -377,6 +399,15 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
 
     def execute_server_info(self, data={}):
         return self.cached_op(self.CACHE_SERVER, dict(op='server_info'), data)
+
+    def execute_instance_list(self, data={}):
+        return self.cached_op(self.CACHE_INSTANCE, dict(op='instance_list'), data)
+
+    def execute_instance_params(self, data):
+        wf = str(data.get('workflow', '') or '')
+        if not wf:
+            return self.fail('workflow fehlt')
+        return self.cached_op(self.CACHE_INSTANCE_PARAMS + wf, dict(op='instance_params', workflow=wf), data)
 
     def execute_cache_clear(self, data={}):
         key = str(data.get('key', '') or '')
@@ -414,7 +445,7 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
             if value == self.target:
                 return
             self.target = value
-            self.cache, self.remote_pending, self.results = {}, {}, OrderedDict()
+            self.cache, self.remote_pending, self.results, self.done = {}, {}, OrderedDict(), OrderedDict()
             self.remote_error = ''
             self.cache_loaded = False
             self.ensure_cache_loaded()
@@ -444,6 +475,62 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
     def save_workflow(self, json_file, workflow: dict):
         raise NotImplementedError('RemoteComfy speichert Workflows über op=workflow_upload auf der Ziel-Instanz')
 
+    # --- In der ComfyUI-Instanz gespeicherte Workflows (instance_*) der Ziel-Instanz -------------
+
+    def instance_workflow_dir(self):
+        return None  # das Verzeichnis liegt auf der Ziel-Instanz
+
+    def instance_workflows(self) -> list:
+        """ instance_list der Ziel-Instanz (gecacht), pending bzw. Fehler als OSError """
+        res = self.cached_get(self.CACHE_INSTANCE, dict(op='instance_list'),
+                              wait=self.page_wait_for(self.CACHE_INSTANCE))
+        if res.get('pending'):
+            raise OSError(f'wird von {self.target} abgerufen, Seite gleich neu laden')
+        if not res.get('success'):
+            raise OSError(str(res.get('message', 'Fehler auf ' + self.target)))
+        return list(res.get('workflows') or [])
+
+    def part_instance(self, p: base.Page, params={}):
+        p.h1("ComfyUI-Instanz auf " + html.escape(self.target or '-'))
+        p.prop("Ziel-Instanz", html.escape(f'{self.remote_type}@{self.target}'))
+        p.prop("Stand", self.cache_age(self.CACHE_INSTANCE))
+        p(self.action_btn(dict(title="Neu abrufen", type=self.type, op='cache_clear', key=self.CACHE_INSTANCE),
+                          hint="Liste der Workflows beim nächsten Laden neu von der Ziel-Instanz holen"))
+        try:
+            self.part_instance_table(p, self.instance_workflows())
+        except OSError as e:
+            p.alert_warn(html.escape(str(e)))
+        p.div(w.a("Zurück", self.link(self.part_index)))
+
+    def part_instance_workflow(self, p: base.Page, params={}):
+        path = str(params.get('w', ''))
+        cache_key = self.CACHE_INSTANCE_PARAMS + path
+        p.h1("Workflow: " + html.escape(path))
+        p.div(w.a("Zurück zur Instanz", self.link(self.part_instance)))
+        info = self.cached_get(cache_key, dict(op='instance_params', workflow=path), wait=self.page_wait_for(cache_key))
+        if info.get('pending'):
+            p.alert_warn(f"Parameter werden von {html.escape(self.target)} abgerufen, Seite gleich neu laden.")
+            return
+        if not info.get('success'):
+            p.alert_error(f"{html.escape(path)} kann nicht geladen werden: "
+                          f"{html.escape(str(info.get('message', 'Fehler')))}")
+            return
+        p.div(f"Stand: {self.cache_age(cache_key)} " +
+              self.action_btn(dict(title="Neu abrufen", type=self.type, op='cache_clear', key=cache_key),
+                              hint="Parameter beim nächsten Laden neu von der Ziel-Instanz holen"))
+        for msg in info.get('warnings') or []:
+            p.alert_warn(html.escape(str(msg)))
+        self.part_params_form(p, self, info.get('params') or [], dict(type=self.type, op='instance_run', workflow=path),
+                              f"Workflow in die Queue der ComfyUI-Instanz auf {self.target} stellen",
+                              self.JS_SHOW_IMAGES, wait_finish=True)
+        p.div('', id='result_images', style='display: flex; flex-wrap: wrap; gap: 8px;')
+        p.pre('', id='result')
+
+    def part_instance_assets(self, p: base.Page, params={}):
+        p.h1("ComfyUI-Assets")
+        p.alert_warn("Assets der Ziel-Instanz sind über den Job-Speicher nicht verfügbar.")
+        p.div(w.a("Zurück zur Instanz", self.link(self.part_instance)))
+
     # --- Seiten ---------------------------------------------------------------------------------
 
     def cache_age(self, cache_key) -> str:
@@ -452,6 +539,87 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
         if entry is None:
             return '-'
         return time.strftime('%d.%m. %H:%M:%S', time.localtime(entry['ts']))
+
+    def nav(self, p: base.Page, active=None):
+        with self.remote_lock:
+            pending, done = len(self.remote_pending), len(self.done)
+        p.nav(("Index", self.link(self.part_index), "Workflows, Server und weitere Seiten"),
+              (f"Pending ({pending})", self.link(self.part_pending), "Jobs, auf deren Antwort gewartet wird"),
+              (f"Done ({done})", self.link(self.part_done), "Erledigte Jobs mit Ergebnis"),
+              active=self.link(active) if active is not None else None)
+
+    def part_index(self, p: base.Page, params={}):
+        self.nav(p, self.part_index)
+        super().part_index(p, params)
+
+    def part_pending(self, p: base.Page, params={}):
+        self.nav(p, self.part_pending)
+        with self.remote_lock:
+            status = self.remote_status()
+            rows = sorted(self.remote_pending.values(), key=lambda m: m['seq'], reverse=True)
+            rows = [dict(guid=m['guid'], key=m.get('key') or '', label=m.get('label') or '',
+                         cache_key=m.get('cache_key') or '', sent=m.get('ts')) for m in rows]
+        p.prop("Status", html.escape(status))
+        now = time.time()
+        col = w.Grid.col
+        with p.section(h=f"Pending ({len(rows)})"):
+            p.grid(rows, [
+                col('sent', "Gesendet", value=lambda e: fmt_ts(e['sent']), sort=lambda e: e['sent'] or 0),
+                col('wait', "Wartet", value=lambda e: f"{int(now - (e['sent'] or now))} s",
+                    sort=lambda e: e['sent'] or 0),
+                col('label', "Job"),
+                col('cache_key', "Cache"),
+                col('key', "guid"),
+            ], params, search=True, empty="Keine offenen Jobs.")
+        if rows:
+            p.js_ready(f'setTimeout(function() {{ window.location.reload(); }}, '
+                       f'{int(max(self.poll_interval, 2) * 1000)});')
+
+    def part_done(self, p: base.Page, params={}):
+        self.nav(p, self.part_done)
+        with self.remote_lock:
+            rows = [dict(e) for e in reversed(self.done.values())]
+        col = w.Grid.col
+        with p.section(h=f"Done ({len(rows)}, höchstens {self.keep})"):
+            p.grid(rows, [
+                col('done', "Erledigt", value=lambda e: fmt_ts(e['done']), sort=lambda e: e['done'] or 0),
+                col('duration', "Dauer", value=lambda e: f"{int((e['done'] or 0) - (e['sent'] or e['done'] or 0))} s"),
+                col('label', "Job"),
+                col('success', "Status", html=True,
+                    value=lambda e: '<span class="badge ok">ok</span>' if e['success']
+                    else '<span class="badge warn">Fehler</span>'),
+                col('message', "Meldung", value=lambda e: e['message'][:120]),
+                col('download', "Download", html=True, sortable=False, value=self.col_download),
+                col('actions', '', html=True, sortable=False,
+                    value=lambda e: self.action_btn(dict(type=self.type, op='remote_result', guid=e['key'],
+                                                         title="Ergebnis"), hint="Ergebnis der Ziel-Instanz anzeigen")),
+            ], params, search=True, empty="Noch keine erledigten Jobs.")
+        p.pre('', id='result')
+
+    def col_download(self, e) -> str:
+        return ' '.join(w.a(html.escape(name), self.dispatcher_link(self.page_image, key=e['key'], i=i),
+                            "Bild der Ziel-Instanz herunterladen")
+                        for i, name in enumerate(e.get('images') or [])) or '-'
+
+    def page_image(self, params={}):
+        """ Bild i aus dem Ergebnis key (instance_run mit wait_finish) herunterladen """
+        import base64
+        import mimetypes
+        from flask import Response
+        key = str(params.get('key', ''))
+        try:
+            i = int(params.get('i', 0))
+        except ValueError:
+            i = -1
+        with self.remote_lock:
+            images = (self.results.get(key) or {}).get('images') or []
+        if not 0 <= i < len(images) or not isinstance(images[i], dict):
+            return Response('Bild nicht (mehr) vorhanden', status=404, mimetype='text/plain')
+        img = images[i]
+        name = str(img.get('filename') or f'bild{i}').rsplit('/', 1)[-1].replace('"', '')
+        mime = img.get('mime') or mimetypes.guess_type(name)[0] or 'application/octet-stream'
+        return Response(base64.b64decode(img.get('data') or ''), mimetype=mime,
+                        headers={'Content-Disposition': f'attachment; filename="{name}"'})
 
     def part_workflow_table(self, p: base.Page):
         super().part_workflow_table(p)
@@ -482,4 +650,6 @@ class RemoteComfy(ComfyUi, RemoteJobMixin):
         self.server_buttons(p)
         p(self.action_btn(dict(title="Remote-Status", type=self.type, op='remote_state'),
                           hint="Ausstehende Jobs, letzter Fehler und Cache-Einträge"))
+        p(self.link_btn("Remote Workflows", self.link(self.part_instance),
+                        hint="In der ComfyUI-Instanz der Ziel-Instanz gespeicherte Workflows (user/default/workflows)"))
         p.div("Die Ziel-Instanz arbeitet die Jobs im Takt ihres Tickers ab; Server-Abfragen warten auf die Antwort.")
