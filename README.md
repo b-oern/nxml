@@ -81,6 +81,16 @@ Arbeitsverzeichnis `work_dir`, Standard `/tmp/nxml_pointcloud`.
 pointcloud: nxml.vision.pointcloud:PointCloudRunner
 ```
 
+## HunyuanWorld-Mirror (3D-Rekonstruktion)
+
+`worldmirror` (`nxml.vision.worldmirror:WorldMirror`) rekonstruiert eine Szene aus Bildern oder einem Video mit [tencent/HunyuanWorld-Mirror](https://huggingface.co/tencent/HunyuanWorld-Mirror): Punktwolke, Kameraposen/-intrinsik, optional Tiefe, Normalen und 3D-Gaussians (`save_depth`, `save_normals`, `save_gs`).
+Das Modell läuft in einem eigenen venv (`~/.venvs/worldmirror`, Python 3.10, torch 2.4/cu124) mit dem Repo-Klon `~/.venvs/worldmirror-src`. Einrichten mit `{"type": "worldmirror", "op": "setup"}` (braucht git und uv, uv wird unter Linux sonst geladen), Fortschritt mit `op=status`.
+Jobs: `{"images": [<base64>, ...]}`, `{"video": <base64>}` oder `{"path": "<Ordner/Video>"}`. Ergebnisse in `work_dir` (Standard `/tmp/nxml_worldmirror`); ist `pointcloud` registriert, wird die Wolke übernommen und `viewer` verlinkt die 3D-Ansicht.
+
+```
+worldmirror: nxml.vision.worldmirror:WorldMirror
+```
+
 ## LM Studio
 
 `lmstudio` (`nxml.llm:LMStudio`) nutzt einen lokalen [LM-Studio](https://lmstudio.ai)-Server (Standard `http://localhost:1234`).

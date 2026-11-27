@@ -4,6 +4,7 @@ Vision-Package.
 - nxml.vision.face: FaceSimilarity
 - nxml.vision.slam: SlamRunner (monokulares Visual SLAM, Kamerapose und Punktwolke aus Video/Stream)
 - nxml.vision.pointcloud: PointCloudRunner (3D-Ansicht von Punktwolken, PLY/XYZ und SLAM-Karten)
+- nxml.vision.worldmirror: WorldMirror (3D-Rekonstruktion mit HunyuanWorld-Mirror, isoliertes venv)
 - nxml.vision.ocr: BonReader (Kassenbon -> Positionen, Preise, Händler),
   DeepSeekOcr (DeepSeek-OCR über einen isolierten vLLM-Server)
 """
@@ -22,6 +23,9 @@ def __getattr__(name):
     if name == 'PointCloudRunner':
         from nxml.vision.pointcloud import PointCloudRunner
         return PointCloudRunner
+    if name == 'WorldMirror':
+        from nxml.vision.worldmirror import WorldMirror
+        return WorldMirror
     if name == 'BonReader':
         from nxml.vision.ocr import BonReader
         return BonReader
@@ -34,4 +38,4 @@ def __getattr__(name):
     raise AttributeError(f"module 'nxml.vision' has no attribute {name!r}")
 
 
-__all__ = ['FaceSimilarity', 'SlamRunner', 'PointCloudRunner', 'BonReader', 'DeepSeekOcr', 'ComfyUi']
+__all__ = ['FaceSimilarity', 'SlamRunner', 'PointCloudRunner', 'WorldMirror', 'BonReader', 'DeepSeekOcr', 'ComfyUi']

@@ -546,6 +546,87 @@ class TextClassifier(HuggingRunner, r.BaseJobExecutor):
             p(self.action_btn_parametric("Übernehmen", dict(type=self.type, op='configure', model='#model')))
 
 
+class AiTextDetector(HuggingRunner, r.BaseJobExecutor):
+    """
+    Erkennt KI-generierte bzw. KI-überarbeitete deutsche wissenschaftliche Texte (ModernBERT/mmBERT-small, ~0,6 GB).
+
+    https://huggingface.co/aliissa824/german-academic-ai-text-mmbert-small (CC BY-SA 4.0)
+
+    Klassen: human, ai_generated, ai_assisted (menschlicher Text, von KI überarbeitet)
+    Texte werden nach 512 Tokens abgeschnitten, kurze Texte (<= 70 Wörter) sind unzuverlässig.
+    Das Ergebnis ist eine Wahrscheinlichkeit, kein Beweis. Kalibrierung: logits / temperature vor softmax.
+
+    t.detect("Die vorliegende Arbeit untersucht ...")
+    """
+    TAGS = [r.TAG.TEXT_EXTRACTOR, 'hugging']
+    MODULES = ['transformers', 'torch']
+
+    model_name = "aliissa824/german-academic-ai-text-mmbert-small"
+    HF_MODEL_ATTRS = ('tokenizer', 'model')
+
+    max_length = 512
+    # aus calibration.json des Modells
+    TEMPERATURE = 3.448
+    MIN_WORDS = 70
+
+    def __init__(self, type='ai_text', model=None, device_mode='auto', temperature=None):
+        """
+            :param temperature: Kalibrierung, None = TEMPERATURE, 1 = unkalibriert
+        """
+        super().__init__()
+        self.type = type
+        self.temperature = float(temperature) if temperature not in (None, '') else self.TEMPERATURE
+        self.hf_init(model, device_mode)
+        self.define_vars('temperature')
+        self.define_sig(d.Param('text'))\
+            .set_description("Schätzt, ob ein deutscher wissenschaftlicher Text von Menschen, KI oder "
+                             "KI-unterstützt geschrieben wurde")\
+            .r(label='str', score='float', probabilities='dict', truncated='bool', words='int', reliable='bool')
+
+    def load_model(self):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        self.tokenizer = self.hf_pretrained(AutoTokenizer, to_device=False)
+        self.model = self.hf_pretrained(AutoModelForSequenceClassification)
+
+    def detect(self, text: str) -> dict:
+        """
+            :return: {label, score, probabilities: {human, ai_generated, ai_assisted}, truncated, words, reliable}
+        """
+        import torch
+        self.load()
+        enc = self.tokenizer(text, return_tensors='pt', truncation=True, max_length=self.max_length,
+                             return_overflowing_tokens=False)
+        truncated = len(self.tokenizer(text, truncation=False)['input_ids']) > self.max_length
+        enc = {k: v.to(self.device) for k, v in enc.items() if k in ('input_ids', 'attention_mask')}
+        with torch.no_grad():
+            logits = self.model(**enc).logits[0].float()
+        probs = (logits / (self.temperature or 1.0)).softmax(-1).tolist()
+        id2label = self.model.config.id2label
+        probabilities = {id2label[i]: float(p) for i, p in enumerate(probs)}
+        label = max(probabilities, key=probabilities.get)
+        words = len(text.split())
+        return dict(label=label, score=probabilities[label], probabilities=probabilities,
+                    truncated=truncated, words=words, reliable=words > self.MIN_WORDS)
+
+    def execute(self, data):
+        if 'text' in data:
+            text = str(data['text']).strip()
+            if not text:
+                return self.fail("Kein Text angegeben")
+            return self.detect(text)
+        return super().execute(data)
+
+    def part_index(self, p: b.Page, params={}):
+        self.part_hf_nav(p, 'index')
+        p.h1("KI-Text-Erkennung (Deutsch, wissenschaftlich)")
+        p.div("Klassen: human, ai_generated, ai_assisted. Nur die ersten 512 Tokens werden bewertet, "
+              f"Texte bis {self.MIN_WORDS} Wörter sind unzuverlässig. Wahrscheinlichkeit, kein Beweis.")
+        p('<textarea id="text" name="text" style="width:90%; height:160px"></textarea>')
+        p(self.action_btn_parametric("Prüfen", type=self.type, text='#text'))
+        with p.section(h="Output"):
+            p.pre('', id='result')
+
+
 class Jeff(HuggingRunner, r.BaseJobExecutor):
     """
     Fact-Check- und Text-Klassifikator Jeff-1 (~8 GB VRAM bf16, ~4,5 GB 8-bit, ~3 GB 4-bit).
